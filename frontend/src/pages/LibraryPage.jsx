@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 
 import ArtistImage from "../components/ArtistImage";
+import { AurralAlbumStatus } from "../components/AurralAlbumStatus";
 import { DotLoader } from "../components/DotLoader";
 import { LibraryItemMenu, LibraryItemSubmenu } from "../components/LibraryItemMenu";
 import TooltipButton from "../components/TooltipButton";
@@ -48,6 +49,7 @@ import {
   fetchCanonicalLibraryPage,
   getActiveLibraryRefresh,
   getCanonicalLibraryPage,
+  getDownloadStatus,
   getLibraryFavorites,
   getLibraryRefreshStatus,
   getRequests,
@@ -65,6 +67,12 @@ import {
 } from "../utils/api/endpoints/playlists.js";
 import { buildAuthenticatedApiUrl } from "../utils/api/core.js";
 import { mergeAlbumMetadataTracks } from "../utils/libraryTrackHydration.js";
+import {
+  aurralAlbumStatusKey,
+  describeAurralAlbumStatus,
+  shouldPollAlbumStatuses,
+} from "../utils/aurralAlbumStatus.js";
+import { describeAlbumBadges, trackSourceLabel } from "../utils/librarySourceBadges.js";
 import { getMonitorOptionsForManager } from "../utils/libraryDestination.js";
 import { navigateToLibraryAlbum } from "../utils/searchNavigation";
 import { DEFAULT_LIBRARY_VIEW, LIBRARY_VIEWS } from "../navigation/libraryNavConfig";
@@ -1419,6 +1427,40 @@ function LibraryPage() {
     loadAlbumTracks(libraryAlbum).catch(() => {});
   }, [isPreviewLibrary, libraryAlbum, loadAlbumTracks]);
 
+  const aurralAlbumStatusKeys = useMemo(() => {
+    if (libraryAlbum || isPreviewLibrary) return [];
+    return library.albums
+      .filter((album) => {
+        if (album.managedBy !== "aurral") return false;
+        const { total, available } = albumAvailability(album);
+        return !total || available < total;
+      })
+      .map((album) => aurralAlbumStatusKey(album.id))
+      .sort();
+  }, [albumAvailability, isPreviewLibrary, library.albums, libraryAlbum]);
+  const aurralAlbumStatusesQuery = useQuery({
+    queryKey: queryKeys.downloadStatus(aurralAlbumStatusKeys),
+    queryFn: ({ signal }) =>
+      getDownloadStatus(aurralAlbumStatusKeys, { signal, bypassCache: true }),
+    enabled: aurralAlbumStatusKeys.length > 0,
+    staleTime: 0,
+    refetchInterval: (query) => (shouldPollAlbumStatuses(query.state.data) ? 4000 : false),
+    refetchIntervalInBackground: false,
+  });
+  const aurralAlbumStatuses = aurralAlbumStatusesQuery.data || {};
+
+  const refreshLibraryActivity = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: activityQueryKey }),
+    [activityQueryKey],
+  );
+  const reloadLibraryAlbumTracks = useCallback(async () => {
+    if (!libraryAlbum) return;
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.libraryAlbumTracks(String(libraryAlbum.id), libraryAlbum.releaseGroupMbid || null),
+    });
+    await loadAlbumTracks(libraryAlbum).catch(() => {});
+  }, [libraryAlbum, loadAlbumTracks]);
+
   useEffect(() => {
     if (!libraryAlbum || isPreviewLibrary) return undefined;
     const tracks = getAlbumTracks(libraryAlbum);
@@ -1743,7 +1785,7 @@ function LibraryPage() {
     setSearchParams(next);
   };
 
-  const renderTrackList = (tracks, label) => (
+  const renderTrackList = (tracks, label, { showSources = false } = {}) => (
     <div className="native-library-track-list">
       <div
         className="native-library-track native-library-track--heading"
@@ -1764,6 +1806,7 @@ function LibraryPage() {
           const album = getAlbumForTrack(track);
           const artist = getArtistForAlbum(album);
           const file = firstAvailableFile(track);
+          const sourceLabel = showSources ? trackSourceLabel(file) : null;
           const researchFile = firstAvailableAurralFile(track);
           const researchAlbumRelation = track?.albums?.find(
             (entry) => String(entry.albumId) === String(researchFile?.albumId),
@@ -1916,7 +1959,12 @@ function LibraryPage() {
                 onClick={() => playTrack(track, tracks)}
               >
                 <span>{track.title || "Unknown Track"}</span>
-                <small>{artistName}</small>
+                <small>
+                  {artistName}
+                  {sourceLabel && (
+                    <span className="native-library-track__source">{" · " + sourceLabel}</span>
+                  )}
+                </small>
               </button>
             </Tooltip>
             {artist ? (
@@ -2132,6 +2180,10 @@ function LibraryPage() {
           (availability.total || 0) +
           " tracks";
     const isFavorite = favoriteIds.has(favoriteId("album", album));
+    const aurralState = album.managedBy === "aurral"
+      ? describeAurralAlbumStatus(aurralAlbumStatuses[aurralAlbumStatusKey(album.id)] || {})
+      : null;
+    const cardStatus = aurralState?.status === "complete" ? null : aurralState;
     return (
       <article className="native-library-card" data-library-menu-target key={album.id}>
         <div className="native-library-card__cover-wrap">
@@ -2247,7 +2299,14 @@ function LibraryPage() {
               {artist?.name || album.albumArtist || "Unknown Artist"}
             </span>
           )}
-          <span className="native-library-card__meta">{meta}</span>
+          <span className="native-library-card__meta">
+            {cardStatus && (
+              <span className="native-library-card__status" data-tone={cardStatus.tone}>
+                {cardStatus.label + " · "}
+              </span>
+            )}
+            {meta}
+          </span>
         </div>
       </article>
     );
@@ -2378,6 +2437,7 @@ function LibraryPage() {
     const artist = getArtistForAlbum(libraryAlbum);
     const albumTracks = getAlbumTracks(libraryAlbum);
     const availability = albumAvailability(libraryAlbum);
+    const badges = describeAlbumBadges(libraryAlbum);
     const durationMs = albumTracks.reduce(
       (total, track) => total + Number(firstAvailableFile(track)?.durationMs || 0),
       0,
@@ -2407,6 +2467,24 @@ function LibraryPage() {
                 .filter(Boolean)
                 .join(" · ")}
             </p>
+            {(badges.manager || badges.sources.length > 0) && (
+              <ul className="native-library-detail__badges" aria-label="Library source">
+                {badges.manager && <li>{badges.manager.label}</li>}
+                {badges.sources.map((badge) => (
+                  <li key={badge.id}>{badge.label}</li>
+                ))}
+              </ul>
+            )}
+            {libraryAlbum.managedBy === "aurral" && !isPreviewLibrary && (
+              <AurralAlbumStatus
+                key={libraryAlbum.id}
+                album={libraryAlbum}
+                artist={artist}
+                canManage={canAddTracks}
+                onChanged={refreshLibraryActivity}
+                onSettled={reloadLibraryAlbumTracks}
+              />
+            )}
             <div className="native-library-detail__actions">
               <button
                 type="button"
@@ -2498,7 +2576,9 @@ function LibraryPage() {
             <h3>Tracks</h3>
             <span>{availability.total}</span>
           </div>
-          {renderTrackList(albumTracks, libraryAlbum.title + " tracks")}
+          {renderTrackList(albumTracks, libraryAlbum.title + " tracks", {
+            showSources: badges.showTrackSources,
+          })}
         </section>
       </section>
     );
