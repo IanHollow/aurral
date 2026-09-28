@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 
 import ArtistImage from "../components/ArtistImage";
+import { AurralAlbumMonitoring } from "../components/AurralAlbumMonitoring";
 import { AurralAlbumStatus } from "../components/AurralAlbumStatus";
 import { DotLoader } from "../components/DotLoader";
 import { LibraryItemMenu, LibraryItemSubmenu } from "../components/LibraryItemMenu";
@@ -74,6 +75,11 @@ import {
 } from "../utils/aurralAlbumStatus.js";
 import { describeAlbumBadges, trackSourceLabel } from "../utils/librarySourceBadges.js";
 import { getMonitorOptionsForManager } from "../utils/libraryDestination.js";
+import {
+  MONITOR_OPTIONS,
+  describeArtistMonitoringResult,
+  describeAurralMonitoringError,
+} from "../utils/aurralMonitoring.js";
 import { navigateToLibraryAlbum } from "../utils/searchNavigation";
 import { DEFAULT_LIBRARY_VIEW, LIBRARY_VIEWS } from "../navigation/libraryNavConfig";
 import { libraryPreviewData, libraryPreviewFavorites } from "./libraryPreviewData";
@@ -1078,29 +1084,31 @@ function LibraryPage() {
     async (artist, monitorOption) => {
       if (!artist?.mbid || !canChangeMonitoring) return;
       try {
+        let patch = { monitored: true, monitorOption };
+        let message = `Artist monitoring set to ${monitorOption}`;
         if (!isPreviewLibrary) {
-          await updateLibraryArtist(artist.mbid, {
+          const response = await updateLibraryArtist(artist.mbid, {
             monitored: true,
             monitorOption,
             addOptions: { ...(artist.addOptions || {}), monitor: monitorOption },
           });
+          const aurralResult = describeArtistMonitoringResult(response);
+          if (aurralResult) {
+            ({ patch, message } = aurralResult);
+            clearCanonicalLibraryPageCache();
+            void queryClient.invalidateQueries({ queryKey: queryKeys.libraryCanonicalPrefix });
+            void queryClient.invalidateQueries({ queryKey: queryKeys.libraryViewPrefix });
+          }
         }
         setLibrary((current) => ({
           ...current,
           artists: current.artists.map((entry) =>
-            String(entry.id) === String(artist.id)
-              ? { ...entry, monitored: true, monitorOption }
-              : entry,
+            String(entry.id) === String(artist.id) ? { ...entry, ...patch } : entry,
           ),
         }));
-        showSuccess(`Artist monitoring set to ${monitorOption}`);
+        showSuccess(message);
       } catch (requestError) {
-        showError(
-          requestError.response?.data?.message ||
-            requestError.response?.data?.error ||
-            requestError.message ||
-            "Failed to update artist monitoring",
-        );
+        showError(describeAurralMonitoringError(requestError));
       }
     },
     [canChangeMonitoring, isPreviewLibrary, setLibrary, showError, showSuccess],
@@ -1108,20 +1116,14 @@ function LibraryPage() {
 
   const artistMonitorItems = (artist) => {
     const currentOption = artist?.monitorOption || artist?.addOptions?.monitor || "none";
-    return getMonitorOptionsForManager([
-      { value: "none", label: "None (artist only)" },
-      { value: "existing", label: "Existing albums" },
-      { value: "all", label: "All albums" },
-      { value: "future", label: "Future albums" },
-      { value: "missing", label: "Missing albums" },
-      { value: "latest", label: "Latest album" },
-      { value: "first", label: "First album" },
-    ], artist?.managedBy).map(({ value, label }) => ({
-      id: value,
-      label,
-      selected: currentOption === value,
-      onSelect: () => updateArtistMonitoring(artist, value),
-    }));
+    return getMonitorOptionsForManager(MONITOR_OPTIONS, artist?.managedBy).map(
+      ({ value, label }) => ({
+        id: value,
+        label,
+        selected: currentOption === value,
+        onSelect: () => updateArtistMonitoring(artist, value),
+      }),
+    );
   };
 
   const downloadMissingTrack = useCallback(
@@ -1453,6 +1455,25 @@ function LibraryPage() {
     () => queryClient.invalidateQueries({ queryKey: activityQueryKey }),
     [activityQueryKey],
   );
+  const updateAlbumMonitoringState = useCallback(
+    (albumId, result) => {
+      const monitored = result?.monitored === true;
+      setLibrary((current) => ({
+        ...current,
+        albums: current.albums.map((entry) =>
+          String(entry.id) === String(albumId)
+            ? { ...entry, monitored, monitorMode: monitored ? "monitored" : "unmonitored" }
+            : entry,
+        ),
+      }));
+      clearCanonicalLibraryPageCache();
+      void queryClient.invalidateQueries({ queryKey: queryKeys.libraryCanonicalPrefix });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.libraryViewPrefix });
+      refreshLibraryActivity();
+    },
+    [refreshLibraryActivity, setLibrary],
+  );
+
   const reloadLibraryAlbumTracks = useCallback(async () => {
     if (!libraryAlbum) return;
     await queryClient.invalidateQueries({
@@ -2474,6 +2495,13 @@ function LibraryPage() {
                   <li key={badge.id}>{badge.label}</li>
                 ))}
               </ul>
+            )}
+            {libraryAlbum.managedBy === "aurral" && !isPreviewLibrary && canChangeMonitoring && (
+              <AurralAlbumMonitoring
+                key={`monitoring-${libraryAlbum.id}`}
+                album={libraryAlbum}
+                onChanged={(result) => updateAlbumMonitoringState(libraryAlbum.id, result)}
+              />
             )}
             {libraryAlbum.managedBy === "aurral" && !isPreviewLibrary && (
               <AurralAlbumStatus
