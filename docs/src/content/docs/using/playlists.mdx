@@ -25,11 +25,11 @@ Flow and static playlist names must be unique across both kinds.
 
 ## Stop plays from affecting recommendations
 
-Open the **More** menu of a flow or static playlist and turn off **Scrobble tracks**. Aurral then does not record plays from that playlist in your listening history, your recommendations, or your scrobbling services. Each playlist has its own setting. Plays recorded before the change stay.
+Open the menu of a flow or static playlist and turn off **Scrobble tracks**. Aurral then does not record plays from that playlist in your listening history, your recommendations, or your scrobbling services. Each playlist has its own setting. Plays recorded before the change stay.
 
 ## Show track availability
 
-To see the download state of each track in a static playlist, open its **More** menu and turn on **Show track availability**. It is off by default, and each playlist has its own setting.
+To see the download state of each track in a static playlist, open its playlist menu and turn on **Show track availability**. It is off by default, and each playlist has its own setting.
 
 - A colored mark beside each track shows whether it is available, downloading, queued, missing, or waiting for review. Point at the mark, or move focus to it, to read the state.
 - The playlist header shows how many tracks are available.
@@ -94,8 +94,6 @@ The default profile accepts all tiers, with **FLAC standard** as the cutoff.
 Aurral uses the names and bitrates in search results to rank candidates. It does not trust them to accept a file. After the download, Aurral reads the file and rejects it if its format, bitrate, sample rate, or bit depth does not match an enabled tier. A file with unknown quality is rejected.
 
 A quality rejection does not go to **Activity > Queue**. Queue review is only for tracks with an unclear identity or duration, including upgrade downloads.
-
-The **Quality** column on the playlist page shows the measured tier and its profile state. It shows **Lidarr** for a file reused from Lidarr.
 
 ## Track upgrades
 

@@ -48,7 +48,7 @@ Deep Dive needs a Last.fm API key. It does not change the schedule or the source
 
 ## Scrobbling and library
 
-Open the flow's **More** menu to set these options:
+Open the flow menu to set these options:
 
 - **Scrobble tracks** controls whether Aurral records plays from this flow in your listening history. Turn it off to keep these plays out of your recommendations and your scrobbling services. Plays recorded before the change stay.
 - **Show in library** adds the flow's current tracks to the Library pages. It is off by default. A track leaves the Library when it rotates out of the flow, when you turn the option off, or when you delete the flow. Aurral does not move or copy the files. Lidarr and your playback servers do not change.
@@ -107,7 +107,7 @@ If a download fails, Aurral replaces the track with a reserve candidate. Only fl
 ## Keep flow tracks
 
 - To keep one track in the Library, select **Add to library** in the track menu.
-- To save all finished tracks as a static playlist, select **Convert to static**. Aurral names the new playlist after the flow, with `Static` at the end.
+- To save all finished tracks as a static playlist, select **Save as playlist** in the flow menu. Aurral names the new playlist after the flow, with `Static` at the end.
 
 ## Replace a flow track
 
@@ -120,4 +120,4 @@ The current file stays available until the replacement passes Aurral's checks.
 
 ## Lidarr import list
 
-Each flow can publish a URL that Lidarr reads as a **Custom List**. Copy it with **Lidarr import URL** in the flow menu. See [Lidarr: Import list feeds](/integrations/lidarr/#import-list-feeds).
+Each flow can publish a URL that Lidarr reads as a **Custom List**. Copy it with **Copy Lidarr import URL** in the flow menu. See [Lidarr: Import list feeds](/integrations/lidarr/#import-list-feeds).
