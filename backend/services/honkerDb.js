@@ -148,7 +148,7 @@ const PIPELINE_PHASE_PRIORITY = {
   finalize: 30,
 };
 
-export function getPipelinePriorityForPhase(phase) {
+function getPipelinePriorityForPhase(phase) {
   return PIPELINE_PHASE_PRIORITY[String(phase || "").toLowerCase()] ?? 0;
 }
 
@@ -329,6 +329,7 @@ const playlistMbidEnrichment = registerQueue({
   maxAttempts: 4,
   workerModule: "./playlistMbidEnrichmentWorker.js",
   workerStartFn: "startPlaylistMbidEnrichmentWorker",
+  skipInTest: true,
 });
 
 export const getPlaylistMbidEnrichmentQueue = playlistMbidEnrichment.getQueue;
