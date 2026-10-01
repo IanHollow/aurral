@@ -139,7 +139,34 @@ function artistProjectionSummary(artists) {
   return { itemCount: artists.length };
 }
 
-function seedDatabase(database, { tracks, tracksPerAlbum }) {
+async function writeScanFixture(filePath, title) {
+  const word = (value) => {
+    const buffer = Buffer.alloc(4);
+    buffer.writeUInt32LE(value);
+    return buffer;
+  };
+  const tags = [
+    "ARTIST=Targeted Fixture Artist", "ALBUM=Targeted Fixture Album", `TITLE=${title}`, "GENRE=Rock",
+    "MUSICBRAINZ_ALBUMARTISTID=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "MUSICBRAINZ_ALBUMID=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    "MUSICBRAINZ_TRACKID=cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  ];
+  const comments = Buffer.concat([word(0), word(tags.length), ...tags.flatMap((tag) => {
+    const buffer = Buffer.from(tag);
+    return [word(buffer.length), buffer];
+  })]);
+  const streamInfo = Buffer.alloc(34);
+  streamInfo.writeUInt16BE(4096, 0);
+  streamInfo.writeUInt16BE(4096, 2);
+  streamInfo.writeUInt32BE((44100 << 12) | (1 << 9) | (15 << 4), 10);
+  const header = Buffer.alloc(4);
+  header[0] = 0x84;
+  header.writeUIntBE(comments.length, 1, 3);
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, Buffer.concat([Buffer.from("fLaC"), Buffer.from([0, 0, 0, 34]), streamInfo, header, comments]));
+}
+
+function seedDatabase(database, { tracks, tracksPerAlbum, musicRoot }) {
   const albumCount = Math.ceil(tracks / tracksPerAlbum);
   const artistCount = Math.ceil(albumCount / 10);
   const metadata = JSON.stringify({ genres: ["Rock"], tags: ["benchmark"] });
@@ -228,7 +255,7 @@ function seedDatabase(database, { tracks, tracksPerAlbum }) {
       insertFile.run(
         trackId,
         albumId,
-        `/synthetic/Benchmark Artist ${String(artistIndex).padStart(5, "0")}/${
+        `${musicRoot}/Benchmark Artist ${String(artistIndex).padStart(5, "0")}/${
           `Benchmark Album ${String(albumIndex).padStart(6, "0")}`
         }/${String((trackIndex % tracksPerAlbum) + 1).padStart(2, "0")}.flac`,
         now,
@@ -579,7 +606,8 @@ async function main() {
       "../backend/services/weeklyFlow/weeklyFlowPlaylistConfig.js"
     );
     const seedStarted = performance.now();
-    const seed = seedDatabase(database, options);
+    const musicRoot = path.join(dataDir, "music");
+    const seed = seedDatabase(database, { ...options, musicRoot });
     rebuildLibrarySearchIndex();
     queryService.rebuildCanonicalGenreStats();
     const benchmarkUser = seedSubsonicFavorite(database);
@@ -595,6 +623,15 @@ async function main() {
       ["tracks", { kind: "tracks", page: 1, pageSize: 100 }],
       ["tracks-search", { kind: "tracks", page: 1, pageSize: 100, query: String(options.tracks - 1) }],
       ["genres", { kind: "genres", page: 1, pageSize: 100 }],
+      ["tracks-playable", { kind: "tracks", page: 1, pageSize: 100, availableOnly: true }],
+      ["tracks-newest", { kind: "tracks", page: 1, pageSize: 100, availableOnly: true, sort: "newest" }],
+      ["tracks-by-artist", { kind: "tracks", page: 1, pageSize: 100, availableOnly: true, sort: "artist" }],
+      ["tracks-genre", { kind: "tracks", page: 1, pageSize: 100, availableOnly: true, genre: "Rock" }],
+      ["tracks-broad-search", { kind: "tracks", page: 1, pageSize: 100, availableOnly: true, query: "Benchmark" }],
+      ["tracks-short-search", { kind: "tracks", page: 1, pageSize: 100, availableOnly: true, query: "Be" }],
+      ["tracks-last-page", {
+        kind: "tracks", page: Math.ceil(options.tracks / 100), pageSize: 100, availableOnly: true,
+      }],
     ];
     const pages = {};
     for (const [name, pageOptions] of pageCases) {
@@ -624,6 +661,46 @@ async function main() {
       pageSize: 100,
     });
     const artistProjectionPlanDetails = artistProjectionPlan.map((row) => String(row.detail || ""));
+    const { getAvailableLibraryMediaPaths } = await import("../backend/services/libraryMediaStore.js");
+    const { scanConfiguredLibrary } = await import("../backend/services/libraryIndexService.js");
+    const target = path.join(musicRoot, "Targeted Fixture Artist", "Targeted Fixture Album", "track.flac");
+    const scanOptions = {
+      musicRoot: path.join(dataDir, "downloads"),
+      lidarrRoots: [musicRoot],
+      lidarrClient: { isEnabled: () => true },
+      changedPaths: [target],
+      force: true,
+    };
+    let previousTitle = "Targeted Fixture Original";
+    await writeScanFixture(target, previousTitle);
+    await scanConfiguredLibrary(scanOptions);
+    const fixtureAlbumId = database.prepare(
+      "SELECT album_id FROM library_media_files WHERE source = 'lidarr' AND path = ?",
+    ).get(target).album_id;
+    const searchFixture = (query) => queryService.getCanonicalLibraryPage({
+      kind: "tracks", query, albumId: fixtureAlbumId, source: "lidarr", availableOnly: true,
+    }).total;
+    const scopedPathSamples = [];
+    const targetedScanSamples = [];
+    for (let index = 0; index < options.repeats; index += 1) {
+      const sample = measure(() => getAvailableLibraryMediaPaths("lidarr", [target]).size);
+      scopedPathSamples.push(sample);
+      const title = `Targeted Fixture Revision ${index}`;
+      await writeScanFixture(target, title);
+      const scanStarted = performance.now();
+      const result = await scanConfiguredLibrary(scanOptions);
+      const elapsedMs = performance.now() - scanStarted;
+      targetedScanSamples.push({
+        elapsedMs, changed: result.lidarr.changed,
+        filesSeen: result.lidarr.filesSeen, filesIndexed: result.lidarr.filesIndexed,
+        filesFailed: result.lidarr.filesFailed,
+        searchMatches: searchFixture(title), previousSearchMatches: searchFixture(previousTitle),
+      });
+      previousTitle = title;
+    }
+    queryService.rebuildCanonicalGenreStats();
+    const scopedPaths = summarizeSamples(scopedPathSamples);
+    const targetedScans = summarizeSamples(targetedScanSamples);
     database.close();
     database = null;
     const subsonicReads = {};
@@ -730,6 +807,13 @@ async function main() {
           /SEARCH album USING (?:COVERING )?INDEX .*artist_id/.test(detail),
         )
         && !artistProjectionPlanDetails.some((detail) => detail === "SCAN album"),
+      scopedPathsBounded: scopedPathSamples.every((sample) => sample.value === 1)
+        && isFiniteBelow(scopedPaths.p95Ms, 20),
+      targetedScanUnder750ms: targetedScanSamples.every((sample) => sample.changed)
+        && isFiniteBelow(targetedScans.p95Ms, 750),
+      targetedScanIndexesChangedFile: targetedScanSamples.every((sample) =>
+        sample.filesSeen === 1 && sample.filesIndexed === 1 && sample.filesFailed === 0
+        && sample.searchMatches === 1 && sample.previousSearchMatches === 0),
     };
     output = {
       benchmark: "aurral-library",
@@ -742,6 +826,8 @@ async function main() {
       seed: { ...seed, elapsedMs: seedElapsedMs },
       subsonicReads,
       pages,
+      scopedPaths,
+      targetedScans,
       artistProjectionPlan,
       budgets: {
         targets: {
@@ -751,6 +837,8 @@ async function main() {
           starredMedianMs: 75,
           responseBytes: 2 * 1024 * 1024,
           requestRssDeltaBytes: 64 * 1024 * 1024,
+          scopedPathP95Ms: 20,
+          targetedScanP95Ms: 750,
         },
         measuredQueryChecks,
         targetedReadChecks,

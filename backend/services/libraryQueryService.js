@@ -14,6 +14,25 @@ import { selectCanonicalFile } from "./canonicalFileSelector.js";
 
 const SOURCES = new Set(["aurral", "lidarr", "flow"]);
 const libraryCache = new Map();
+const pageCountCache = new Map();
+const countDataVersion = db.prepare("PRAGMA data_version");
+const countLocalChanges = db.prepare("SELECT total_changes() AS total");
+let pageCountVersion;
+
+function getPageTotal(sql, parameters) {
+  if (db.inTransaction) return db.prepare(sql).get(...parameters).total;
+  const version = `${countDataVersion.get().data_version}:${countLocalChanges.get().total}`;
+  if (version !== pageCountVersion) {
+    pageCountCache.clear();
+    pageCountVersion = version;
+  }
+  const key = JSON.stringify([sql, parameters]);
+  if (pageCountCache.has(key)) return pageCountCache.get(key);
+  const total = db.prepare(sql).get(...parameters).total;
+  if (pageCountCache.size >= 64) pageCountCache.delete(pageCountCache.keys().next().value);
+  pageCountCache.set(key, total);
+  return total;
+}
 
 onLibraryManagementChange(() => {
   libraryCache.clear();
@@ -1140,7 +1159,6 @@ const pageSize = (value, max = MAX_PAGE_SIZE) =>
 
 const genreStatsCache = new Map();
 const GENRE_STATS_SETTING_PREFIX = "libraryGenreStats:";
-const GENRE_METADATA_PATHS = ["$.genres", "$.genre", "$.common.genre", "$.tags.genre"];
 
 const escapeLike = (value) => value.replace(/[\\%_]/g, "\\$&");
 
@@ -1253,15 +1271,11 @@ const genrePredicate = (aliases, genre) => {
   const clauses = [];
   const parameters = [];
   aliases.forEach((alias) => {
-    GENRE_METADATA_PATHS.forEach((path) => {
-      clauses.push(
-        `(json_valid(${alias}.metadata_json) AND EXISTS (
-          SELECT 1 FROM json_each(${alias}.metadata_json, '${path}') AS genre_value
-          WHERE lower(CAST(genre_value.value AS TEXT)) = lower(?)
-        ))`,
-      );
-      parameters.push(genre);
-    });
+    clauses.push(`${alias}.id IN (
+      SELECT entity_id FROM library_entity_genres
+      WHERE entity_kind = '${alias}s' AND lower(name) = lower(?)
+    )`);
+    parameters.push(genre);
   });
   return { sql: `(${clauses.join(" OR ")})`, parameters };
 };
@@ -1787,23 +1801,12 @@ function computeCanonicalGenres(sourceFilter, availableOnly) {
     parameters.push(sourceFilter);
   }
   if (availableOnly === true) mediaConditions.push("media.available = 1");
-  const genreRows = (column) => GENRE_METADATA_PATHS.map((path) => `
-    SELECT album_id, track_id, TRIM(CAST(genre_value.value AS TEXT)) AS genre
-    FROM eligible_tracks
-    JOIN json_each(
-      CASE WHEN json_valid(${column}) THEN ${column} ELSE '{}' END,
-      '${path}'
-    ) AS genre_value
-    WHERE json_valid(${column})
-      AND TRIM(CAST(genre_value.value AS TEXT)) <> ''`).join(" UNION ");
   return db.prepare(
     `WITH eligible_tracks AS MATERIALIZED (
        SELECT DISTINCT
          album.id AS album_id,
          track.id AS track_id,
-         artist.metadata_json AS artist_metadata_json,
-         album.metadata_json AS album_metadata_json,
-         track.metadata_json AS track_metadata_json
+         artist.id AS artist_id
        FROM library_albums AS album
        JOIN library_artists AS artist ON artist.id = album.artist_id
        JOIN library_album_tracks AS album_track ON album_track.album_id = album.id
@@ -1814,17 +1817,29 @@ function computeCanonicalGenres(sourceFilter, availableOnly) {
          WHERE ${mediaConditions.join(" AND ")}
        )
      ),
+     eligible_albums AS (
+       SELECT DISTINCT album_id, artist_id FROM eligible_tracks
+     ),
      direct_genres AS (
-       SELECT DISTINCT album_id, genre FROM (
-         ${genreRows("artist_metadata_json")}
-         UNION
-         ${genreRows("album_metadata_json")}
-       )
+       SELECT eligible.album_id, genres.name AS genre
+       FROM eligible_albums AS eligible
+       JOIN library_entity_genres AS genres
+         ON genres.entity_kind = 'artists' AND genres.entity_id = eligible.artist_id
+       UNION
+       SELECT eligible.album_id, genres.name AS genre
+       FROM eligible_albums AS eligible
+       JOIN library_entity_genres AS genres
+         ON genres.entity_kind = 'albums' AND genres.entity_id = eligible.album_id
      ),
      track_genres AS (
-       SELECT DISTINCT album_id, track_id, genre FROM (
-         ${genreRows("track_metadata_json")}
-       )
+       SELECT DISTINCT eligible.album_id, eligible.track_id, genres.name AS genre
+       FROM eligible_tracks AS eligible
+       CROSS JOIN library_entity_genres AS genres
+       WHERE genres.entity_kind = 'tracks' AND genres.entity_id = eligible.track_id
+         AND NOT EXISTS (
+           SELECT 1 FROM direct_genres AS direct
+           WHERE direct.album_id = eligible.album_id AND direct.genre = genres.name
+         )
      ),
      track_counts AS (
        SELECT album_id, COUNT(*) AS song_count
@@ -1838,10 +1853,6 @@ function computeCanonicalGenres(sourceFilter, availableOnly) {
        UNION ALL
        SELECT track.album_id, track.genre, COUNT(*) AS song_count
        FROM track_genres AS track
-       WHERE NOT EXISTS (
-         SELECT 1 FROM direct_genres AS direct
-         WHERE direct.album_id = track.album_id AND direct.genre = track.genre
-       )
        GROUP BY track.album_id, track.genre
      )
      SELECT genre AS value, COUNT(*) AS albumCount, SUM(song_count) AS songCount
@@ -2369,17 +2380,33 @@ export function getCanonicalLibraryPage({
     artistId,
     albumId,
   });
-  const total = db.prepare(
+  const total = getPageTotal(
     `SELECT COUNT(DISTINCT ${queryDefinition.idExpression}) AS total
      ${queryDefinition.from}
      WHERE ${queryDefinition.where}`,
-  ).get(...queryDefinition.parameters).total;
-  const ids = db.prepare(
-    `SELECT ${queryDefinition.idExpression} AS page_id
+    queryDefinition.parameters,
+  );
+  const matchingIds = `SELECT ${queryDefinition.idExpression} AS page_id
      ${queryDefinition.from}
-     WHERE ${queryDefinition.where}
+     WHERE ${queryDefinition.where}`;
+  const broadTrackSearch = normalizedKind === "tracks" && normalizedQuery
+    && normalizedSort === "name" && !queryDefinition.groupBy
+    && currentOffset + currentPageSize <= 1000
+    && total > getPageTotal("SELECT COUNT(*) AS total FROM library_tracks", []) / 2;
+  const pageQuery = broadTrackSearch
+    ? `SELECT track.id AS page_id
+       FROM library_tracks AS track INDEXED BY idx_library_tracks_title
+       CROSS JOIN library_search_documents AS search_document
+       CROSS JOIN library_search_fts AS search_fts
+       WHERE search_document.entity_kind = 'track' AND search_document.entity_id = track.id
+         AND search_fts.rowid = search_document.id AND library_search_fts MATCH ?
+         AND ${queryDefinition.where}
+       ORDER BY ${queryDefinition.orderBy}`
+    : `${matchingIds}
      ${queryDefinition.groupBy ? `GROUP BY ${queryDefinition.groupBy}` : ""}
-     ORDER BY ${queryDefinition.orderBy}
+     ORDER BY ${queryDefinition.orderBy}`;
+  const ids = db.prepare(
+    `${pageQuery}
      LIMIT ? OFFSET ?`,
   ).all(
     ...queryDefinition.parameters,
@@ -2476,6 +2503,7 @@ export function rebuildCanonicalGenreStats() {
 
 export function invalidateCanonicalLibraryCache({ persistedGenres = true } = {}) {
   libraryCache.clear();
+  pageCountCache.clear();
   genreStatsCache.clear();
   invalidateLibraryManagementCache();
   if (persistedGenres) {
