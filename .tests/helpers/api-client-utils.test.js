@@ -2,22 +2,25 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import createCache from "../../backend/services/apiClients/simpleCache.js";
 import createRateLimiter from "../../backend/services/apiClients/rateLimiter.js";
 import axios from "../../lib/axiosFetch.js";
 
-test("rate limiter spaces concurrent request starts", async () => {
+test("rate limiter spaces concurrent and sequential request starts", async () => {
   const limiter = createRateLimiter(30);
   const starts = [];
-  await Promise.all(
-    [1, 2, 3].map(() =>
-      limiter.schedule(() => {
-        starts.push(Date.now());
-      }),
-    ),
-  );
-  assert.ok(starts[1] - starts[0] >= 20);
-  assert.ok(starts[2] - starts[1] >= 20);
+  const request = () =>
+    limiter.schedule(async () => {
+      starts.push(Date.now());
+      await delay(5);
+    });
+  await Promise.all([request(), request(), request()]);
+  await request();
+  await request();
+  for (let index = 1; index < starts.length; index += 1) {
+    assert.ok(starts[index] - starts[index - 1] >= 20, `start ${index} came too soon`);
+  }
 });
 
 test("rate limiter rejects excess queued reservations from a burst", async () => {
@@ -211,7 +214,7 @@ test("public-only transport rejects socket failures without an uncaught exceptio
     let publicLookups = 0;
     dns.lookup = async () => {
       publicLookups += 1;
-      return [{ address: "203.0.113.1", family: 4 }];
+      return [{ address: "8.8.8.8", family: 4 }];
     };
     net.Socket.prototype.connect = function (options) {
       options.lookup(options.hostname || options.host, { all: false }, () => {
