@@ -108,3 +108,5 @@ Settings and Profile save each change automatically. Connection tests and sync a
 To set the date and time format for all users, open **Settings > System > Display**. Choose the browser default, day first, or year first.
 
 Advanced metadata settings are at `/settings/metadata`. This page is not in the Settings navigation. See [Metadata and search](/integrations/metadata/).
+
+Release catalogue refreshes have a separate worker in **Settings > Tasks**, so a slow metadata provider does not hold up playlist maintenance. An **Interrupted** run means unfinished work was returned to the queue after shutdown or loss of its execution lease.
