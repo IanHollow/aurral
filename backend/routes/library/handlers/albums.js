@@ -29,7 +29,11 @@ export function registerAlbums(router) {
         return res.json(albums);
       }
 
-      const albums = await libraryManager.getAlbums(artistId);
+      const { managedBy = null } = req.query;
+      if (managedBy !== null && managedBy !== "aurral" && managedBy !== "lidarr") {
+        return res.status(400).json({ error: "managedBy must be 'aurral' or 'lidarr'" });
+      }
+      const albums = await libraryManager.getAlbums(artistId, null, { managedBy });
       const formatted = albums.map((album) => ({
         ...album,
         foreignAlbumId: album.foreignAlbumId || album.mbid,
@@ -70,7 +74,7 @@ export function registerAlbums(router) {
 
         let managedBy;
         try {
-          managedBy = await libraryManager.resolveManagedBy(requestedManagedBy, req.user);
+          managedBy = await libraryManager.resolveManagedBy(requestedManagedBy);
         } catch (error) {
           return res.status(error.statusCode || 400).json({
             error: error.message,
@@ -362,6 +366,26 @@ export function registerAlbums(router) {
           error: "Failed to update album",
           message: error.message,
         });
+      }
+    },
+  );
+
+  router.delete(
+    "/albums/lidarr/:mbid",
+    requireAuth,
+    requirePermission("deleteAlbum"),
+    async (req, res) => {
+      try {
+        const result = await libraryManager.deleteLidarrAlbumByMbid(
+          req.params.mbid,
+          req.query?.deleteFiles === "true",
+        );
+        if (!result?.success) {
+          return res.status(result?.statusCode || 503).json({ error: result?.error || "Failed to delete album" });
+        }
+        res.json({ success: true, message: "Album deleted successfully" });
+      } catch (error) {
+        res.status(500).json({ error: "Failed to delete album", message: error.message });
       }
     },
   );

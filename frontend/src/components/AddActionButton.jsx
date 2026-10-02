@@ -1,11 +1,11 @@
 import { forwardRef } from "react";
-import { MoreVertical, Plus, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { MoreVertical, Plus, RefreshCw } from "lucide-react";
 import Tooltip from "./Tooltip";
 import TooltipButton from "./TooltipButton";
 import SearchLibraryCheck from "./SearchLibraryCheck";
 import { DotLoader } from "./DotLoader";
 import { LibraryItemMenu } from "./LibraryItemMenu";
-import { ADD_TO_MENU_LABEL, getAddToManagerLabel } from "../utils/libraryDestination";
+import { getAddToManagerLabel } from "../utils/libraryDestination";
 
 const keepActivationKeysLocal = (event) => {
   if (event.key === "Enter" || event.key === " ") event.stopPropagation();
@@ -16,7 +16,7 @@ const AddActionButton = forwardRef(function AddActionButton(
     label,
     destination = null,
     onAdd,
-    onCustomize,
+    items = null,
     ownerConflict = null,
     icon: Icon = Plus,
     isLoading = false,
@@ -53,7 +53,6 @@ const AddActionButton = forwardRef(function AddActionButton(
   const visibleLabel = showLabel ? <span className="btn-add-action__label">Add to library</span> : null;
   const opensMenu = !children && buttonProps["aria-haspopup"] === "menu";
   const primary = destination?.primary || null;
-  const alternative = destination?.alternative || null;
   const isDisabled = disabled || isLoading || (destination ? !destination.ready : false);
   const handleClick = onAdd && primary
     ? (event) => {
@@ -81,32 +80,14 @@ const AddActionButton = forwardRef(function AddActionButton(
     );
   }
 
-  if (alternative && onAdd) {
-    const managers = ["lidarr", "aurral"].filter(
-      (manager) => manager === primary || manager === alternative,
-    );
-    const items = managers.map((manager) => ({
-      id: manager,
-      label: getAddToManagerLabel(manager),
-      icon: Plus,
-      onSelect: () => onAdd(manager),
-    }));
-    if (onCustomize && managers.includes("lidarr")) {
-      items.push({
-        id: "customize-lidarr",
-        label: "Customize Lidarr add…",
-        icon: SlidersHorizontal,
-        separatorBefore: true,
-        closeBeforeSelect: true,
-        onSelect: onCustomize,
-      });
-    }
+  if (items) {
+    const menuLabel = label ?? getAddToManagerLabel(primary);
     return (
       <div onKeyDown={keepActivationKeysLocal}>
         <LibraryItemMenu
-          label={ADD_TO_MENU_LABEL}
-          menuLabel={ADD_TO_MENU_LABEL}
-          triggerLabel={ADD_TO_MENU_LABEL}
+          label={menuLabel}
+          menuLabel={menuLabel}
+          triggerLabel={menuLabel}
           triggerClassName={`${classes} btn-add-action--menu`}
           triggerIcon={
             <>

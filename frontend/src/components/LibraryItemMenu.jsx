@@ -1,10 +1,17 @@
 import { createPortal } from "react-dom";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
-import { ChevronRight, MoreVertical } from "lucide-react";
+import { Check, ChevronRight, MoreVertical } from "lucide-react";
 import TooltipButton from "./TooltipButton";
 import { DotLoader } from "./DotLoader";
 
 let activeMenuCloser = null;
+
+const menuItemRole = (item) => {
+  if (item.radio) return "menuitemradio";
+  return typeof item.selected === "boolean" || typeof item.checked === "boolean"
+    ? "menuitemcheckbox"
+    : "menuitem";
+};
 
 export function LibraryItemSubmenu({
   label,
@@ -95,16 +102,16 @@ export function LibraryItemSubmenu({
         {items.map((item) => {
           const ItemIcon = item.icon;
           const isPending = pendingAction === item.id;
-          const isToggle = typeof item.selected === "boolean" || typeof item.checked === "boolean";
+          const role = menuItemRole(item);
           return (
             <button
               type="button"
-              role={isToggle ? "menuitemcheckbox" : "menuitem"}
+              role={role}
               className={`artist-menu-item${item.danger ? " artist-menu-item--danger" : ""}${item.selected ? " is-selected" : ""}`}
               key={item.id}
               onClick={(event) => handleAction(event, item)}
               disabled={item.disabled || !!pendingAction}
-              aria-checked={isToggle ? (item.checked ?? item.selected) : undefined}
+              aria-checked={role === "menuitem" ? undefined : Boolean(item.checked ?? item.selected)}
             >
               <span className="artist-menu-item__main">
                 {isPending ? (
@@ -114,6 +121,7 @@ export function LibraryItemSubmenu({
                 ) : null}
                 {item.label}
               </span>
+              {item.radio && item.selected ? <Check className="artist-icon-sm" aria-hidden="true" /> : null}
             </button>
           );
         })}
@@ -258,7 +266,12 @@ export const LibraryItemMenu = forwardRef(function LibraryItemMenu(
 
   useEffect(() => {
     if (!open) return;
-    menuRef.current?.querySelector("button:not(:disabled)")?.focus({ preventScroll: true });
+    const panel = menuRef.current;
+    if (!panel) return;
+    const firstItem = [...panel.querySelectorAll("button:not(:disabled)")].find(
+      (button) => !button.closest(".artist-menu-submenu"),
+    );
+    (firstItem || panel).focus({ preventScroll: true });
   }, [open]);
 
   const updatePosition = useCallback(() => {
@@ -334,7 +347,7 @@ export const LibraryItemMenu = forwardRef(function LibraryItemMenu(
       {items.map((item) => {
         const Icon = item.icon;
         const isPending = pendingAction === item.id;
-        const isToggle = typeof item.selected === "boolean" || typeof item.checked === "boolean";
+        const role = menuItemRole(item);
         if (Array.isArray(item.submenuItems)) {
           return (
             <div key={item.id}>
@@ -354,11 +367,11 @@ export const LibraryItemMenu = forwardRef(function LibraryItemMenu(
             {item.separatorBefore ? <div className="native-library-item-menu__separator" /> : null}
             <button
               type="button"
-              role={isToggle ? "menuitemcheckbox" : "menuitem"}
+              role={role}
               className={`artist-menu-item${item.danger ? " artist-menu-item--danger" : ""}${item.selected ? " is-selected" : ""}`}
               onClick={(event) => handleAction(event, item)}
               disabled={item.disabled || !!pendingAction}
-              aria-checked={isToggle ? (item.checked ?? item.selected) : undefined}
+              aria-checked={role === "menuitem" ? undefined : Boolean(item.checked ?? item.selected)}
             >
               <span className="artist-menu-item__main">
                 {isPending ? (
@@ -368,6 +381,7 @@ export const LibraryItemMenu = forwardRef(function LibraryItemMenu(
                 ) : null}
                 {item.label}
               </span>
+              {item.radio && item.selected ? <Check className="artist-icon-sm" aria-hidden="true" /> : null}
             </button>
             {item.id === additionalItemsAfter && renderAdditionalItems?.({ closeMenu })}
           </div>
@@ -410,6 +424,7 @@ export const LibraryItemMenu = forwardRef(function LibraryItemMenu(
               className={`native-library-item-menu__panel${submenuSide === "left" ? " is-submenu-left" : ""}`}
               role="menu"
               aria-label={menuLabel}
+              tabIndex={-1}
               style={{ left: position.left, top: position.top }}
               onClick={(event) => event.stopPropagation()}
               onKeyDown={handleMenuKeyDown}

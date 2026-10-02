@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
-  addArtistToLibrary,
   requestAlbumFromSearch,
   settleLibraryOwnerConflict,
 } from "../utils/api/endpoints/library.js";
@@ -10,7 +9,6 @@ import {
 } from "../utils/api/endpoints/playlists.js";
 import { getTagSuggestions } from "../utils/api/endpoints/discovery.js";
 import { searchLibrary, searchUnified } from "../utils/api/endpoints/search.js";
-import { getArtistRecordId } from "../utils/artistTaste";
 import {
   buildUnifiedSuggestionSections,
   flattenSuggestionSections,
@@ -39,8 +37,6 @@ import {
 import { describeAlbumRequestResult, getAlbumAddAction, shouldTriggerAlbumSearch } from "../utils/albumAddAction";
 import {
   buildAlbumRequestPayload,
-  buildArtistAddPayload,
-  getManagerName,
 } from "../utils/libraryDestination";
 import { useLibraryDestination } from "../hooks/useLibraryDestination";
 import { useDebouncedTask } from "../hooks/useDebouncedTask";
@@ -85,9 +81,7 @@ function GlobalSearch({ settingsMode = false }) {
     setPlaylistsError: setPlaylistModalError,
     loadSharedPlaylists,
   } = useSharedPlaylists();
-  const canAddArtist = hasPermission("addArtist");
   const canAddAlbum = hasPermission("addAlbum");
-  const [pendingArtistIds, setPendingArtistIds] = useState({});
   const [pendingAlbumIds, setPendingAlbumIds] = useState({});
   const [playlistMenuSavingKey, setPlaylistMenuSavingKey] = useState("");
 
@@ -407,38 +401,6 @@ function GlobalSearch({ settingsMode = false }) {
     );
   }, []);
 
-  const handleArtistAction = useCallback(
-    async (artist, managedBy = libraryDestination.primary) => {
-      const artistId = getArtistRecordId(artist);
-      if (!artist?.name || !artistId || !libraryDestination.ready) return false;
-      setPendingArtistIds((prev) => ({ ...prev, [artistId]: true }));
-      try {
-        await addArtistToLibrary(buildArtistAddPayload({
-          artistMbid: artistId,
-          artistName: artist.name,
-          managedBy,
-        }));
-        updateSuggestionItem(artist, { inLibrary: true });
-        showSuccess(`Added ${artist.name} to ${getManagerName(managedBy)}`);
-        return true;
-      } catch (err) {
-        const conflict = settleLibraryOwnerConflict(err);
-        if (conflict) {
-          updateSuggestionItem(artist, { inLibrary: true });
-          showInfo(`${artist.name}: ${conflict.message}`);
-          return false;
-        }
-        showError(`Failed to add artist to ${getManagerName(managedBy)}: ${
-          err.response?.data?.message || err.response?.data?.error || err.message
-        }`);
-        return false;
-      } finally {
-        setPendingArtistIds(({ [artistId]: _, ...prev }) => prev);
-      }
-    },
-    [libraryDestination.primary, libraryDestination.ready, showError, showInfo, showSuccess, updateSuggestionItem],
-  );
-
   const handleAlbumAction = useCallback(
     async (album, managedBy = libraryDestination.primary) => {
       if (!album?.id) return;
@@ -474,7 +436,7 @@ function GlobalSearch({ settingsMode = false }) {
           showInfo(`${album.title}: ${conflict.message}`);
           return;
         }
-        showError(`Failed to add album to ${getManagerName(managedBy)}: ${
+        showError(`Could not download the album: ${
           err.response?.data?.message || err.response?.data?.error || err.message
         }`);
       } finally {
@@ -539,19 +501,6 @@ function GlobalSearch({ settingsMode = false }) {
         return <SearchLibraryCheck />;
       }
 
-      if (item.type === "artist") {
-        const artistId = getArtistRecordId(item);
-        if (!canAddArtist || !artistId) return null;
-        return (
-          <AddActionButton
-            disabled={!!pendingArtistIds[artistId]}
-            isLoading={!!pendingArtistIds[artistId]}
-            destination={libraryDestination}
-            onAdd={(managedBy) => handleArtistAction(item, managedBy)}
-          />
-        );
-      }
-
       if (item.type === "album") {
         if (!canAddAlbum || !item.id) return null;
         const pending = !!pendingAlbumIds[item.id];
@@ -588,14 +537,11 @@ function GlobalSearch({ settingsMode = false }) {
     },
     [
       canAddAlbum,
-      canAddArtist,
       handleAlbumAction,
-      handleArtistAction,
       libraryDestination,
       handleSearchTrackAdd,
       loadSharedPlaylists,
       pendingAlbumIds,
-      pendingArtistIds,
       playlistMenuSavingKey,
       playlistModalError,
       playlistModalLoading,

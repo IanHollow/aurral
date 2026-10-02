@@ -2,7 +2,6 @@ import { expect, test } from "@playwright/test";
 import { apiRequest, openApp, requireCredentials } from "./helpers.js";
 
 const lidarrArtist = { mbid: "69158f97-4c07-4c4e-baf8-4e4ab1ed666e", name: "Boards of Canada" };
-const aurralArtist = { mbid: "f22942a1-6f70-4f48-866e-238cb2308fbd", name: "Aphex Twin" };
 
 requireCredentials();
 
@@ -14,79 +13,57 @@ async function tabTo(page, locator) {
     await page.keyboard.press("Tab");
     if (await locator.evaluate((element) => element === document.activeElement)) return;
   }
-  throw new Error("Keyboard focus never reached the Add to… menu");
+  throw new Error("Keyboard focus never reached the Monitor button");
 }
 
-test("a connected user adds to Lidarr, then adds to Aurral from the keyboard", async ({ page }) => {
+test("with Lidarr, Monitor adds an artist to Lidarr and changes its monitoring", async ({ page }) => {
   test.setTimeout(180_000);
   await openApp(page);
-
-  const ownerBefore = await apiRequest(page, "/api/users/me/library-owner");
-  expect(ownerBefore.ok).toBe(true);
-  for (const artist of [lidarrArtist, aurralArtist]) {
-    expect(
-      (await apiRequest(page, `/api/library/artists/${artist.mbid}`)).status,
-      `${artist.name} must start outside the library; use a fresh candidate database`,
-    ).toBe(404);
-  }
+  expect(
+    (await apiRequest(page, `/api/library/artists/${lidarrArtist.mbid}`)).status,
+    `${lidarrArtist.name} must start outside the library; use a fresh candidate database`,
+  ).toBe(404);
 
   try {
     await page.goto(`/artist/${lidarrArtist.mbid}`);
     await expect(page.getByRole("heading", { name: lidarrArtist.name, level: 1 })).toBeVisible({ timeout: 30_000 });
-    await page.locator(".artist-action-bar").getByRole("button", { name: "Add to…", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Add to Lidarr", exact: true }).click();
-    await expect(page.getByRole("button", { name: /In library/ })).toBeVisible({ timeout: 60_000 });
-    await expect.poll(async () => (await lookupArtist(page, lidarrArtist.mbid))?.exists, { timeout: 30_000 }).toBe(true);
-    const lidarrRecord = await apiRequest(page, `/api/library/artists/${lidarrArtist.mbid}`);
-    expect(lidarrRecord.status).toBe(200);
-    expect(lidarrRecord.body?.managedBy).not.toBe("aurral");
-
-    await page.goto(`/artist/${aurralArtist.mbid}`);
-    await expect(page.getByRole("heading", { name: aurralArtist.name, level: 1 })).toBeVisible({ timeout: 30_000 });
-    const menuTrigger = page.locator(".artist-action-bar").getByRole("button", { name: "Add to…", exact: true });
-    await expect(menuTrigger).toBeVisible({ timeout: 30_000 });
-    await expect(menuTrigger).toBeEnabled();
-    await expect(menuTrigger).toHaveAttribute("aria-haspopup", "menu");
-    await expect(menuTrigger).toHaveAttribute("aria-expanded", "false");
+    const actionBar = page.locator(".artist-action-bar");
+    const monitor = actionBar.getByRole("button", { name: /^(Monitor|Monitoring: .*)$/ });
+    await expect(monitor).toHaveAccessibleName("Monitor", { timeout: 30_000 });
+    await expect(monitor).toHaveAttribute("aria-haspopup", "menu");
 
     await page.locator("body").focus();
-    await tabTo(page, menuTrigger);
+    await tabTo(page, monitor);
     await page.keyboard.press("Enter");
-    const menu = page.getByRole("menu", { name: "Add to…" });
-    const aurralItem = menu.getByRole("menuitem", { name: "Add to Aurral" });
-    await expect(menuTrigger).toHaveAttribute("aria-expanded", "true");
-    await expect(menu.getByRole("menuitem", { name: "Add to Lidarr", exact: true })).toBeFocused();
-    await expect(menu.getByRole("menuitem")).toHaveCount(3);
-
+    const menu = page.getByRole("menu", { name: "Monitoring" });
+    await expect(monitor).toHaveAttribute("aria-expanded", "true");
+    await expect(menu.getByRole("menuitemradio")).toHaveCount(7);
+    await expect(menu.getByRole("menuitem", { name: "Customize add…", exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
-    await expect(menuTrigger).toHaveAttribute("aria-expanded", "false");
-    await expect(menuTrigger).toBeFocused();
+    await expect(monitor).toBeFocused();
 
-    await page.keyboard.press("ArrowDown");
-    await page.keyboard.press("ArrowDown");
-    await expect(aurralItem).toBeFocused();
-    await page.keyboard.press("Enter");
-    await expect(page.getByRole("button", { name: /In library/ })).toBeVisible({ timeout: 60_000 });
+    await monitor.click();
+    await menu.getByRole("menuitemradio", { name: "Future albums", exact: true }).click();
+    await expect(monitor).toHaveAccessibleName("Monitoring: Future albums", { timeout: 60_000 });
+    await expect.poll(async () => (await lookupArtist(page, lidarrArtist.mbid))?.exists, { timeout: 30_000 }).toBe(true);
+    const monitoring = await apiRequest(page, `/api/library/artists/${lidarrArtist.mbid}/monitoring`);
+    expect(monitoring.body).toMatchObject({ manager: "lidarr", added: true, monitorOption: "future" });
 
-    await expect
-      .poll(async () => (await apiRequest(page, `/api/library/artists/${aurralArtist.mbid}`)).body?.managedBy, {
-        timeout: 15_000,
-      })
-      .toBe("aurral");
-    const ownerAfter = await apiRequest(page, "/api/users/me/library-owner");
-    expect(ownerAfter.body).toEqual(ownerBefore.body);
+    await monitor.click();
+    await expect(menu.getByRole("menuitem", { name: "Customize add…", exact: true })).toHaveCount(0);
+    await menu.getByRole("menuitemradio", { name: "Not monitored", exact: true }).click();
+    await expect(monitor).toHaveAccessibleName("Monitor", { timeout: 60_000 });
   } finally {
-    for (const artist of [lidarrArtist, aurralArtist]) {
-      if (!(await lookupArtist(page, artist.mbid))?.exists) continue;
+    if ((await lookupArtist(page, lidarrArtist.mbid))?.exists) {
       const response = await apiRequest(
         page,
-        `/api/library/artists/${artist.mbid}?deleteFiles=false`,
+        `/api/library/artists/${lidarrArtist.mbid}?deleteFiles=false`,
         { method: "DELETE" },
       );
       expect(response.status).toBe(200);
       await expect
-        .poll(async () => (await lookupArtist(page, artist.mbid))?.exists, { timeout: 30_000 })
+        .poll(async () => (await lookupArtist(page, lidarrArtist.mbid))?.exists, { timeout: 30_000 })
         .toBe(false);
     }
   }

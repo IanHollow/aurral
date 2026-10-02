@@ -9,8 +9,6 @@ import {
   updateArtistOverrides,
 } from "../../utils/api/endpoints/artists.js";
 import {
-  addArtistToLibrary,
-  settleLibraryOwnerConflict,
   downloadTrackToLibrary,
   lookupArtistInLibrary,
 } from "../../utils/api/endpoints/library.js";
@@ -48,12 +46,10 @@ import { ArtistDetailsAppearsOn } from "./components/ArtistDetailsAppearsOn";
 import { ArtistDetailsPreviewTracks } from "./components/ArtistDetailsPreviewTracks";
 import { ArtistDetailsAbout } from "./components/ArtistDetailsAbout";
 import { ArtistDetailsSimilar } from "./components/ArtistDetailsSimilar";
-import { DeleteArtistModal } from "./components/DeleteArtistModal";
 import { DeleteAlbumModal } from "./components/DeleteAlbumModal";
 import { AddArtistCustomizeModal } from "./components/AddArtistCustomizeModal";
 import { useLibraryDestination } from "../../hooks/useLibraryDestination";
-import { buildArtistAddPayload, getManagerName } from "../../utils/libraryDestination";
-import { queryClient, queryKeys } from "../../queryClient.js";
+import { queryKeys } from "../../queryClient.js";
 import TooltipButton from "../../components/TooltipButton";
 import CrossViewLink from "../../components/CrossViewLink";
 const MBID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -104,13 +100,8 @@ function ArtistDetailsPage() {
   const saveArtistOverridesMutation = useMutation({
     mutationFn: ({ artistMbid, values }) => updateArtistOverrides(artistMbid, values),
   });
-  const addSimilarArtistMutation = useMutation({
-    mutationFn: addArtistToLibrary,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.libraryCanonicalPrefix }),
-  });
   const downloadTrackMutation = useMutation({ mutationFn: downloadTrackToLibrary });
   const { mutateAsync: saveArtistOverrides } = saveArtistOverridesMutation;
-  const { mutateAsync: addSimilarArtist } = addSimilarArtistMutation;
   const { mutateAsync: downloadTrack } = downloadTrackMutation;
   const idsLoading = artistOverridesQuery.isFetching;
   const idsSaving = saveArtistOverridesMutation.isPending;
@@ -133,7 +124,6 @@ function ArtistDetailsPage() {
   const [tasteActionPending, setTasteActionPending] = useState(null);
   const canAddAlbum = hasPermission("addAlbum");
   const canChangeMonitoring = hasPermission("changeMonitoring");
-  const canDeleteArtist = hasPermission("deleteArtist");
   const canDeleteAlbum = hasPermission("deleteAlbum");
   const {
     artist,
@@ -203,33 +193,6 @@ function ArtistDetailsPage() {
       });
     },
     [currentArtistFeedback, handleArtistTasteFeedback, tasteArtist],
-  );
-
-  const handleAddSimilarArtistToLibrary = useCallback(
-    async (similarArtist, managedBy = libraryDestination.primary) => {
-      const artistId = similarArtist?.id || similarArtist?.mbid;
-      if (!similarArtist?.name || !artistId || !libraryDestination.ready) return false;
-      try {
-        await addSimilarArtist(buildArtistAddPayload({
-          artistMbid: artistId,
-          artistName: similarArtist.name,
-          managedBy,
-        }));
-        showSuccess(`Added ${similarArtist.name} to ${getManagerName(managedBy)}`);
-        return true;
-      } catch (err) {
-        const conflict = settleLibraryOwnerConflict(err);
-        if (conflict) {
-          showInfo(`${similarArtist.name}: ${conflict.message}`);
-          return true;
-        }
-        showError(`Failed to add artist to ${getManagerName(managedBy)}: ${
-          err.response?.data?.message || err.response?.data?.error || err.message
-        }`);
-        return false;
-      }
-    },
-    [addSimilarArtist, libraryDestination.primary, libraryDestination.ready, showError, showInfo, showSuccess],
   );
 
   const library = useArtistDetailsLibrary({
@@ -534,8 +497,8 @@ function ArtistDetailsPage() {
 
       <ArtistDetailsActionBar
         library={library}
-        libraryDestination={libraryDestination}
-        artistManagedBy={libraryArtist?.managedBy}
+        mbid={mbid}
+        artistName={artist?.name || artistNameFromNav || ""}
         existsInLibrary={existsInLibrary}
         libraryLink={
           libraryCanonicalId ? (
@@ -547,7 +510,6 @@ function ArtistDetailsPage() {
         }
         loadingLibrary={loadingLibrary}
         canChangeMonitoring={canChangeMonitoring}
-        canDeleteArtist={canDeleteArtist}
         canAddArtist={canAddArtist}
         canRefreshArtist={canChangeMonitoring}
         buildingQueue={buildingQueue}
@@ -695,24 +657,10 @@ function ArtistDetailsPage() {
               },
             })
           }
-          canAddArtist={canAddArtist}
-          onAddToLibrary={handleAddSimilarArtistToLibrary}
           onArtistFeedback={handleArtistTasteFeedback}
           artistFeedbackLookup={artistFeedbackLookup}
         />
       )}
-
-      <DeleteArtistModal
-        show={library.showDeleteModal && !!libraryArtist}
-        artistName={artist?.name}
-        libraryArtistName={libraryArtist?.artistName}
-        managedBy={libraryArtist?.managedBy}
-        deleteFiles={library.deleteFiles}
-        onDeleteFilesChange={library.setDeleteFiles}
-        onCancel={library.handleDeleteCancel}
-        onConfirm={library.handleDeleteConfirm}
-        deleting={library.deletingArtist}
-      />
 
       <DeleteAlbumModal
         show={!!library.showDeleteAlbumModal}
@@ -738,6 +686,8 @@ function ArtistDetailsPage() {
         setQualityProfileId={library.setCustomizeQualityProfileId}
         tagId={library.customizeTagId}
         setTagId={library.setCustomizeTagId}
+        monitorOption={library.customizeMonitorOption}
+        setMonitorOption={library.setCustomizeMonitorOption}
         onClose={() => library.setShowAddCustomizeModal(false)}
         onConfirm={library.handleCustomizeAddToLibrary}
         confirming={library.addingToLibrary}

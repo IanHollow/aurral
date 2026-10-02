@@ -1,6 +1,6 @@
 import { UUID_REGEX } from "../../../../lib/uuid.js";
 import { libraryManager } from "../../../services/libraryManager.js";
-import { cacheMiddleware } from "../../../middleware/cache.js";
+import { cacheMiddleware, noCache } from "../../../middleware/cache.js";
 import {
   requireAuth,
   requirePermission,
@@ -36,6 +36,21 @@ export function registerArtists(router) {
     } catch (error) {
       res.status(500).json({
         error: "Failed to fetch artists",
+        message: error.message,
+      });
+    }
+  });
+
+  router.get("/artists/:mbid/monitoring", noCache, async (req, res) => {
+    try {
+      const { mbid } = req.params;
+      if (!UUID_REGEX.test(mbid)) {
+        return res.status(400).json({ error: "Invalid MBID format" });
+      }
+      res.json(await libraryManager.getArtistMonitoring(mbid));
+    } catch (error) {
+      res.status(500).json({
+        error: "Failed to read artist monitoring",
         message: error.message,
       });
     }
@@ -93,7 +108,7 @@ export function registerArtists(router) {
 
       let managedBy;
       try {
-        managedBy = await libraryManager.resolveManagedBy(requestedManagedBy, req.user);
+        managedBy = await libraryManager.resolveManagedBy(requestedManagedBy);
       } catch (error) {
         return res.status(error.statusCode || 400).json({
           error: error.message,
@@ -231,19 +246,17 @@ export function registerArtists(router) {
           return res.status(400).json({ error: "Invalid MBID format" });
         }
 
-        const artist = await libraryManager.updateArtist(mbid, req.body);
+        const artist = await libraryManager.setArtistMonitoring(mbid, {
+          monitorOption: req.body?.monitorOption,
+          artistName: req.body?.artistName,
+          user: req.user,
+        });
         if (artist?.error) {
           return res.status(artist.statusCode || 503).json({
             error: artist.error,
             message: artist.error,
             code: artist.code || null,
           });
-        }
-        const { lidarrClient } = await import("../../../services/lidarrClient.js");
-        if (lidarrClient && lidarrClient.isConfigured()) {
-          if (artist.monitorOption && artist.monitorOption !== "none") {
-            await libraryManager.applyArtistMonitoringDefaults(artist);
-          }
         }
         res.json(artist);
       } catch (error) {
@@ -262,13 +275,16 @@ export function registerArtists(router) {
     async (req, res) => {
       try {
         const { mbid } = req.params;
-        const { deleteFiles = false } = req.query;
+        const { deleteFiles = false, manager = null } = req.query;
 
         if (!UUID_REGEX.test(mbid)) {
           return res.status(400).json({ error: "Invalid MBID format" });
         }
+        if (manager !== null && manager !== "aurral" && manager !== "lidarr") {
+          return res.status(400).json({ error: "manager must be 'aurral' or 'lidarr'" });
+        }
 
-        const result = await libraryManager.deleteArtist(mbid, deleteFiles === "true");
+        const result = await libraryManager.deleteArtist(mbid, deleteFiles === "true", { manager });
         if (!result?.success) {
           const message = result?.error || "Failed to delete artist";
           return res

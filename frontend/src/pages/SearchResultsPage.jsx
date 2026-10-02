@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
-  addArtistToLibrary,
   lookupAlbumsInLibraryBatch,
   lookupArtistsInLibraryBatch,
   requestAlbumFromSearch,
@@ -38,8 +37,6 @@ import { getArtistRecordId } from "../utils/artistTaste";
 import { describeAlbumRequestResult, getAlbumAddAction, isAlbumCompleteInLibrary, shouldTriggerAlbumSearch } from "../utils/albumAddAction";
 import {
   buildAlbumRequestPayload,
-  buildArtistAddPayload,
-  getManagerName,
 } from "../utils/libraryDestination";
 import { useLibraryDestination } from "../hooks/useLibraryDestination";
 import {
@@ -123,7 +120,6 @@ function SearchResultsPage() {
   const [libraryLookup, setLibraryLookup] = useState({});
   const [albumLibraryLookup, setAlbumLibraryLookup] = useState({});
   const [pendingAlbumIds, setPendingAlbumIds] = useState({});
-  const [pendingArtistIds, setPendingArtistIds] = useState({});
   const [albumOptionsOpen, setAlbumOptionsOpen] = useState(false);
   const [albumViewMode, setAlbumViewMode] = useState(() => readReleaseListViewMode());
   const [albumReleaseTab, setAlbumReleaseTab] = useState("all");
@@ -181,7 +177,6 @@ function SearchResultsPage() {
   const albumSort = searchParams.get("sort") || DEFAULT_ALBUM_SORT;
   const showTagBanner = isTagSearch && lastfmConfigured === false && !dismissedTagBanner;
   const { lookup: artistFeedbackLookup, submitFeedback } = useArtistTasteFeedback();
-  const canAddArtist = hasPermission("addArtist");
   const canAddAlbum = hasPermission("addAlbum");
   const updateAlbumSort = useCallback(
     (nextSort) => {
@@ -905,7 +900,7 @@ function SearchResultsPage() {
           showInfo(`${album.title}: ${conflict.message}`);
           return;
         }
-        showError(`Failed to add album to ${getManagerName(managedBy)}: ${
+        showError(`Could not download the album: ${
           err.response?.data?.message || err.response?.data?.error || err.message
         }`);
       } finally {
@@ -975,41 +970,6 @@ function SearchResultsPage() {
     [loadSharedPlaylists, setPlaylistModalError, setSharedPlaylists, sharedPlaylists, showError, showSuccess],
   );
 
-  const handleArtistAction = useCallback(
-    async (artist, managedBy = libraryDestination.primary) => {
-      const artistId = getArtistRecordId(artist);
-      if (!artist?.name || !artistId || !libraryDestination.ready) return false;
-      setPendingArtistIds((prev) => ({ ...prev, [artistId]: true }));
-      try {
-        await addArtistToLibrary(buildArtistAddPayload({
-          artistMbid: artistId,
-          artistName: artist.name,
-          managedBy,
-        }));
-        setLibraryLookup((prev) => ({
-          ...prev,
-          [artistId]: true,
-        }));
-        showSuccess(`Added ${artist.name} to ${getManagerName(managedBy)}`);
-        return true;
-      } catch (err) {
-        const conflict = settleLibraryOwnerConflict(err);
-        if (conflict) {
-          setLibraryLookup((previous) => ({ ...previous, [artistId]: true }));
-          showInfo(`${artist.name}: ${conflict.message}`);
-          return false;
-        }
-        showError(`Failed to add artist to ${getManagerName(managedBy)}: ${
-          err.response?.data?.message || err.response?.data?.error || err.message
-        }`);
-        return false;
-      } finally {
-        setPendingArtistIds(({ [artistId]: _, ...prev }) => prev);
-      }
-    },
-    [libraryDestination.primary, libraryDestination.ready, showError, showInfo, showSuccess],
-  );
-
   const handleArtistFeedback = useCallback(
     (artist, action, options = {}) => submitFeedback(artist, action, options),
     [submitFeedback],
@@ -1059,19 +1019,6 @@ function SearchResultsPage() {
         return <SearchLibraryCheck action />;
       }
 
-      if (item.type === "artist") {
-        const artistId = getArtistRecordId(item);
-        if (!canAddArtist || !artistId) return null;
-        return (
-          <AddActionButton
-            disabled={!!pendingArtistIds[artistId]}
-            isLoading={!!pendingArtistIds[artistId]}
-            destination={libraryDestination}
-            onAdd={(managedBy) => handleArtistAction(item, managedBy)}
-          />
-        );
-      }
-
       if (item.type === "album") {
         if (!canAddAlbum || !item.id) return null;
         const pending = !!pendingAlbumIds[item.id];
@@ -1090,15 +1037,12 @@ function SearchResultsPage() {
     },
     [
       canAddAlbum,
-      canAddArtist,
       handleAlbumAction,
-      handleArtistAction,
       libraryDestination,
       handleSearchTrackAdd,
       isSearchResultInLibrary,
       loadSharedPlaylists,
       pendingAlbumIds,
-      pendingArtistIds,
       playlistMenuSavingKey,
       playlistModalError,
       playlistModalLoading,
@@ -1666,8 +1610,6 @@ function SearchResultsPage() {
                       artistImages={artistImages}
                       libraryLookup={libraryLookup}
                       navigate={navigate}
-                      canAddArtist={canAddArtist}
-                      onAddArtistToLibrary={handleArtistAction}
                       onArtistFeedback={handleArtistFeedback}
                       artistFeedbackLookup={artistFeedbackLookup}
                       variant="round"
@@ -1705,8 +1647,6 @@ function SearchResultsPage() {
                   artistImages={artistImages}
                   libraryLookup={libraryLookup}
                   navigate={navigate}
-                  canAddArtist={canAddArtist}
-                  onAddArtistToLibrary={handleArtistAction}
                   onArtistFeedback={handleArtistFeedback}
                   artistFeedbackLookup={artistFeedbackLookup}
                   variant={

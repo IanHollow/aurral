@@ -6,7 +6,6 @@ export function DeleteArtistModal({
   show,
   artistName,
   libraryArtistName,
-  managedBy,
   deleteFiles,
   onDeleteFilesChange,
   onCancel,
@@ -34,11 +33,10 @@ export function DeleteArtistModal({
         tabIndex={-1}
       >
         <h3 id={titleId} className="artist-modal__title">
-          Remove Artist from Library
+          Delete artist
         </h3>
         <p className="artist-modal__copy">
-          Are you sure you want to remove <strong>{artistName || libraryArtistName}</strong> from
-          library?
+          Delete <strong>{artistName || libraryArtistName}</strong> and its albums from your library?
         </p>
 
         <div>
@@ -50,23 +48,10 @@ export function DeleteArtistModal({
               className="artist-checkbox"
             />
             <div>
-              {managedBy === "aurral" ? (
-                <>
-                  <span className="artist-card-title">Delete artist files</span>
-                  <p className="artist-modal__subcopy">
-                    Permanently deletes the files Aurral downloaded for this artist. Files managed
-                    by Lidarr stay on disk. This cannot be undone.
-                  </p>
-                </>
-              ) : (
-                <>
-                  <span className="artist-card-title">Delete artist folder and files</span>
-                  <p className="artist-modal__subcopy">
-                    This will permanently delete the artist&apos;s folder and all music files from
-                    your disk. This action cannot be undone.
-                  </p>
-                </>
-              )}
+              <span className="artist-card-title">Delete artist files</span>
+              <p className="artist-modal__subcopy">
+                Permanently deletes the artist&apos;s music files from disk. This cannot be undone.
+              </p>
             </div>
           </label>
         </div>
@@ -84,10 +69,10 @@ export function DeleteArtistModal({
             {deleting ? (
               <>
                 <DotLoader size="sm" label={null} />
-                Removing...
+                Deleting...
               </>
             ) : (
-              "Remove Artist"
+              "Delete artist"
             )}
           </button>
         </div>

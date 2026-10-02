@@ -80,23 +80,24 @@ WebSocket connections.
 | `GET` | `/api/library/artists` | List library artists |
 | `GET` | `/api/library/artists/:mbid` | Get a library artist |
 | `POST` | `/api/library/artists` | Add an artist |
+| `GET` | `/api/library/artists/:mbid/monitoring` | Get the active manager's monitoring for an artist |
 | `PUT` | `/api/library/artists/:mbid` | Update artist monitoring |
-| `DELETE` | `/api/library/artists/:mbid` | Delete an artist |
+| `DELETE` | `/api/library/artists/:mbid?manager=aurral\|lidarr` | Delete an artist from Lidarr and Aurral, or from one manager with `manager`. Returns `503` and deletes nothing when Lidarr cannot be reached |
 | `POST` | `/api/library/artists/:mbid/refresh` | Refresh an artist in Lidarr |
 | `PUT` | `/api/library/canonical/artists/:id/mbid` | Set a library artist's MusicBrainz ID with `{ "mbid": "…" }`, or clear it with `{ "mbid": null }` |
-| `GET` | `/api/library/albums?artistId=:id` | List an artist's albums |
+| `GET` | `/api/library/albums?artistId=:id&managedBy=aurral\|lidarr` | List an artist's albums. Send the artist's `managedBy` so a Lidarr ID is never read as an Aurral ID |
 | `GET` | `/api/library/albums/:id` | Get an album |
 | `POST` | `/api/library/albums` | Add an album |
 | `POST` | `/api/library/albums/request` | Request an album from search data |
 | `PUT` | `/api/library/albums/:id` | Update an album |
 | `DELETE` | `/api/library/albums/:id` | Delete an album |
-| `PUT` | `/api/library/albums/aurral/:canonicalId` | Monitor or stop monitoring an Aurral-managed album with `{ "monitored": true \| false }` |
+| `PUT` | `/api/library/albums/aurral/:canonicalId` | Monitor or stop monitoring an Aurral-managed album and all of its tracks with `{ "monitored": true \| false }`. Monitoring returns `409` while Lidarr is connected |
 | `GET` | `/api/library/albums/aurral/:canonicalId/status` | Get the download status of an Aurral-managed album |
 | `POST` | `/api/library/albums/aurral/:canonicalId/cancel` | Cancel queued and active downloads for an Aurral-managed album |
 | `DELETE` | `/api/library/albums/aurral/:canonicalId?deleteFiles=true\|false` | Remove an Aurral-managed album |
 | `GET` | `/api/library/tracks` | List album tracks |
 | `DELETE` | `/api/library/tracks/:id` | Delete a library track file and prune canonical records when no media remains |
-| `PUT` | `/api/library/tracks/aurral/:canonicalId` | Monitor or stop monitoring a track in an Aurral-managed album with `{ "monitored": true \| false }` |
+| `PUT` | `/api/library/tracks/aurral/:canonicalId` | Monitor or stop monitoring a track with `{ "monitored": true \| false }`. In a Lidarr album, this controls only Aurral's own download and upgrades of the track |
 | `POST` | `/api/library/refresh` | Queue a library scan. `mode` is `quick`, the default, or `full` to read every file again |
 | `GET` | `/api/library/refresh` | Read the ID and status of the scheduled library scan |
 | `GET` | `/api/library/refresh/:jobId` | Read the status of a library scan |
@@ -121,9 +122,10 @@ WebSocket connections.
 | `POST` | `/api/library/downloads/album/search` | Trigger a Lidarr album search |
 | `POST` | `/api/library/downloads/tracks/:trackId/research` | Search for a replacement of an Aurral library track. Send the `albumId`. Returns `409` when a search for the track is already running |
 
-The artist and album add routes accept an optional `managedBy` value of
-`aurral` or `lidarr`. If the value is absent, Aurral uses the user's saved
-library-owner preference and falls back to Lidarr when Lidarr is connected.
+Lidarr manages artists and albums when it is connected, and Aurral manages
+them otherwise. The artist and album add routes accept an optional `managedBy`
+value. A value other than the active manager returns `409` with
+`library_manager_unavailable`.
 
 Aurral album routes take the canonical album ID, not a Lidarr album ID. They
 return `409` with the current manager when Lidarr manages the album. An album
@@ -134,13 +136,22 @@ status is one of `complete`, `downloading`, `queued`, `blocked`, `cancelled`,
 a `message`. Album add and request responses include the same status as
 `albumStatus`.
 
-`PUT /api/library/artists/:mbid` sets monitoring for an Aurral-managed artist
-with `monitorOption` set to `none`, `all`, `missing`, `latest`, `first`, or
-`future`. `existing` returns `400` with `unsupported_monitor_mode`. The
-response includes `monitoring.releaseGroupIds` for the albums being queued and
-`monitoring.skipped` with a reason for each skipped album. If artist metadata is
-unavailable, the route returns `503` with `metadata_unavailable` and keeps the
-previous mode.
+`PUT /api/library/artists/:mbid` sets the active manager's monitoring. Send
+`{ "monitorOption": "…", "artistName": "…" }`. With Lidarr, the route adds the
+artist to Lidarr when needed, which requires the `addArtist` permission, and
+hands Lidarr any album it starts monitoring that Aurral has tracks from.
+Aurral accepts `none`, `all`, `missing`, `latest`, `first`, and `future`.
+Lidarr also accepts `existing`. The monitoring read returns
+`{ manager, added, monitorOption, inAurral, error }`, where `inAurral` says
+whether Aurral holds part of the artist, and `monitorOption` is `null`
+when the artist's Lidarr monitoring was changed in Lidarr itself.
+
+For Aurral, the response includes `monitoring.releaseGroupIds` for the albums
+being queued and `monitoring.skipped` with a reason for each skipped album. If
+artist metadata is unavailable, the route returns `503` with
+`metadata_unavailable` and keeps the previous mode. `POST /api/library/artists`
+accepts the same `monitorOption`. For Lidarr, `none` adds the artist without
+monitoring, and leaving it out uses the Lidarr default.
 
 `DELETE /api/library/albums/aurral/:canonicalId` and
 `DELETE /api/library/artists/:mbid` for an Aurral-managed artist cancel
@@ -158,7 +169,9 @@ the remaining tracks continue through per-track fallback. Lidarr-managed
 albums keep Lidarr acquisition behavior.
 
 `POST /api/library/downloads/track` requires an authenticated user with the
-`addAlbum` permission.
+`addAlbum` permission. When `canonicalTrackId` or `trackMbid` names a track in
+an Aurral-managed album, the request monitors that track, queues it with its
+album, and responds with `monitored: true`.
 
 ## Artist metadata
 
@@ -358,8 +371,6 @@ These routes retrieve public playlists anonymously. Preview accepts a supported 
 | `PATCH` | `/api/users/:id` | Update a user |
 | `DELETE` | `/api/users/:id` | Delete a user |
 | `GET` | `/api/users/me/listening-history` | Get listening-history settings for the current user |
-| `GET` | `/api/users/me/library-owner` | Read the current user's default library manager |
-| `POST` | `/api/users/me/library-owner` | Set `defaultLibraryOwner` to `aurral`, `lidarr`, or `null` to use the automatic default |
 | `GET` | `/api/users/me/identities` | List the sign-in identities linked to the current user |
 | `DELETE` | `/api/users/me/identities/:id` | Remove a linked identity. Returns `400` with `last_auth_method` when it is the last way to sign in |
 | `GET` | `/api/users/me/lidarr-preferences` | Current user's Lidarr preferences |

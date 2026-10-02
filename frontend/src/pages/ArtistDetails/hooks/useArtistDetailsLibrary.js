@@ -3,10 +3,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   getLibraryAlbums,
   updateLibraryAlbum,
-  deleteArtistFromLibrary,
   deleteAlbumFromLibrary,
   deleteAurralAlbumFromLibrary,
-  updateLibraryArtist,
   getLibraryArtist,
   triggerAlbumSearch,
   refreshLibraryArtist,
@@ -19,14 +17,8 @@ import {
 import {
   buildAlbumRequestPayload,
   buildArtistAddPayload,
-  getManagerName,
 } from "../../../utils/libraryDestination.js";
-import {
-  describeArtistMonitoringResult,
-  describeAurralMonitoringError,
-  getMonitorOptionLabel,
-  resolveCurrentMonitorOption,
-} from "../../../utils/aurralMonitoring.js";
+import { describeArtistAdd } from "../../../utils/artistMonitoring.js";
 import { describeAlbumRequestResult } from "../../../utils/albumAddAction.js";
 import { getMyLidarrPreferences } from "../../../utils/api/endpoints/auth.js";
 import { deduplicateAlbums } from "../utils";
@@ -89,10 +81,6 @@ export function useArtistDetailsLibrary({
   const [albumDropdownOpen, setAlbumDropdownOpen] = useState(null);
   const [showDeleteAlbumModal, setShowDeleteAlbumModal] = useState(null);
   const [deleteAlbumFiles, setDeleteAlbumFilesState] = useState(() => readDeleteFilesPreference());
-  const [showRemoveDropdown, setShowRemoveDropdown] = useState(false);
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [deleteFiles, setDeleteFilesState] = useState(() => readDeleteFilesPreference());
-  const [showMonitorOptionMenu, setShowMonitorOptionMenu] = useState(false);
   const [refreshingArtist, setRefreshingArtist] = useState(false);
   const [reSearchingAlbum, setReSearchingAlbum] = useState(null);
   const [reSearchingMissingAlbums, setReSearchingMissingAlbums] = useState(false);
@@ -102,6 +90,7 @@ export function useArtistDetailsLibrary({
   const [customizeRootFolderPath, setCustomizeRootFolderPath] = useState("");
   const [customizeQualityProfileId, setCustomizeQualityProfileId] = useState("");
   const [customizeTagId, setCustomizeTagId] = useState("");
+  const [customizeMonitorOption, setCustomizeMonitorOption] = useState("");
   const reSearchOverridesRef = useRef({});
   const previousDownloadStatusesRef = useRef({});
   const unmonitoredAtRef = useRef({});
@@ -177,7 +166,8 @@ export function useArtistDetailsLibrary({
   const libraryAlbumsQueryKey = queryKeys.libraryAlbums(libraryArtist?.id);
   const libraryAlbumsQuery = useQuery({
     queryKey: libraryAlbumsQueryKey,
-    queryFn: ({ signal }) => getLibraryAlbums(libraryArtist.id, { signal }),
+    queryFn: ({ signal }) =>
+      getLibraryAlbums(libraryArtist.id, { signal, managedBy: libraryArtist.managedBy || null }),
     enabled: Boolean(libraryArtist?.id),
     initialData: libraryAlbums,
     initialDataUpdatedAt: 0,
@@ -196,14 +186,6 @@ export function useArtistDetailsLibrary({
   });
   const { refetch: refetchLibraryAlbums } = libraryAlbumsQuery;
   const refreshArtistMutation = useMutation({ mutationFn: refreshLibraryArtist });
-  const deleteArtistMutation = useMutation({
-    mutationFn: ({ mbid, deleteFiles }) => deleteArtistFromLibrary(mbid, deleteFiles),
-    onSuccess: (_result, { mbid }) => invalidateLibraryQueries(mbid),
-  });
-  const updateArtistMutation = useMutation({
-    mutationFn: ({ mbid, data }) => updateLibraryArtist(mbid, data),
-    onSuccess: (_result, { mbid }) => invalidateLibraryQueries(mbid),
-  });
   const addArtistMutation = useMutation({
     mutationFn: addArtistToLibrary,
     onSuccess: () => invalidateLibraryQueries(),
@@ -271,7 +253,6 @@ export function useArtistDetailsLibrary({
 
   const updateDeleteFilesPreference = (value) => {
     writeDeleteFilesPreference(value);
-    setDeleteFilesState(value);
     setDeleteAlbumFilesState(value);
   };
 
@@ -300,65 +281,17 @@ export function useArtistDetailsLibrary({
     }
   };
 
-  const handleDeleteClick = () => {
-    setShowDeleteModal(true);
-  };
-
-  const handleDeleteCancel = () => {
-    setShowDeleteModal(false);
-  };
-
-  const handleDeleteConfirm = async () => {
-    if (!libraryArtist?.id) return;
-    try {
-      await deleteArtistMutation.mutateAsync({ mbid: libraryArtist.mbid, deleteFiles });
+  const reloadLibraryState = async () => {
+    const mbid = artist?.id || libraryArtist?.mbid;
+    if (!mbid) return;
+    await invalidateLibraryQueries(mbid);
+    const lookup = await lookupArtistInLibrary(mbid, { bypassCache: true });
+    if (lookup.exists && lookup.artist) {
+      await resolveLookupArtist(lookup.artist, { refresh: false, hydrateAlbums: true });
+    } else {
       setExistsInLibrary(false);
       setLibraryArtist(null);
       setLibraryAlbums([]);
-      showSuccess(
-        `Successfully removed ${artist?.name || "artist"} from library${
-          deleteFiles ? " and deleted files" : ""
-        }`,
-      );
-      setShowDeleteModal(false);
-    } catch (err) {
-      showError(
-        `Failed to remove artist: ${
-          err.response?.data?.message || err.response?.data?.error || err.message
-        }`,
-      );
-    }
-  };
-
-  const handleUpdateMonitorOption = async (newMonitorOption) => {
-    if (!libraryArtist?.id) return;
-    try {
-      const updatedArtist = {
-        ...libraryArtist,
-        monitored: true,
-        monitorOption: newMonitorOption,
-        addOptions: {
-          ...(libraryArtist.addOptions || {}),
-          monitor: newMonitorOption,
-        },
-      };
-      delete updatedArtist.statistics;
-      delete updatedArtist.images;
-      delete updatedArtist.links;
-      const response = await updateArtistMutation.mutateAsync({
-        mbid: libraryArtist.mbid,
-        data: updatedArtist,
-      });
-      const refreshedArtist = await getLibraryArtist(libraryArtist.mbid, { bypassCache: true });
-      setLibraryArtist(refreshedArtist);
-      setShowRemoveDropdown(false);
-      showSuccess(
-        describeArtistMonitoringResult(response)?.message ||
-          `Monitor option updated to: ${getMonitorOptionLabel(newMonitorOption)}`,
-      );
-    } catch (err) {
-      console.error("Update error:", err);
-      showError(`Failed to update monitor option: ${describeAurralMonitoringError(err)}`);
     }
   };
 
@@ -384,7 +317,10 @@ export function useArtistDetailsLibrary({
       await refreshArtistMutation.mutateAsync(fullArtist.mbid || fullArtist.foreignArtistId);
     }
     if (hydrateAlbums) {
-      const albums = await getLibraryAlbums(fullArtist.id, { bypassCache: true });
+      const albums = await getLibraryAlbums(fullArtist.id, {
+        bypassCache: true,
+        managedBy: fullArtist.managedBy || null,
+      });
       setLibraryAlbums(deduplicateAlbums(albums));
     }
     return fullArtist;
@@ -408,8 +344,6 @@ export function useArtistDetailsLibrary({
     });
   };
 
-  const getCurrentMonitorOption = () =>
-    resolveCurrentMonitorOption(libraryArtist, libraryArtist?.managedBy);
 
   const applyCustomizeDefaults = (preferences) => {
     const nextRootFolderPath =
@@ -429,6 +363,7 @@ export function useArtistDetailsLibrary({
     setCustomizeRootFolderPath(nextRootFolderPath);
     setCustomizeQualityProfileId(nextQualityProfileId);
     setCustomizeTagId(nextTagId);
+    setCustomizeMonitorOption("");
   };
 
   const loadLidarrPreferenceState = async ({ force = false } = {}) => {
@@ -454,7 +389,7 @@ export function useArtistDetailsLibrary({
     }
   };
 
-  const addArtistWithOptions = async (managedBy, lidarrOptions = {}) => {
+  const addArtistWithOptions = async (managedBy, lidarrOptions = {}, monitorOption = null) => {
     if (!artist) {
       showError("Artist information not available");
       return;
@@ -467,6 +402,7 @@ export function useArtistDetailsLibrary({
         quality: appSettings?.quality || "standard",
         managedBy,
         lidarrOptions,
+        ...(monitorOption ? { monitorOption } : {}),
       }));
       let fullArtist = await resolveArtistFromAddResponse(result, {
         refresh: true,
@@ -481,7 +417,7 @@ export function useArtistDetailsLibrary({
       if (!fullArtist) {
         throw new Error("Artist is taking longer than expected to add");
       }
-      showSuccess(`${artist.name} added to ${getManagerName(managedBy)}`);
+      showSuccess(describeArtistAdd({ name: artist.name, manager: managedBy, monitorOption, response: result }));
       return true;
     } catch (err) {
       const conflict = settleLibraryOwnerConflict(err);
@@ -496,7 +432,7 @@ export function useArtistDetailsLibrary({
         showInfo(`${artist.name}: ${conflict.message}`);
         return false;
       }
-      const message = `Failed to add artist to ${getManagerName(managedBy)}: ${
+      const message = `Could not add the artist: ${
           err.response?.data?.message || err.response?.data?.error || err.message
         }`;
       if (showAddCustomizeModal) setCustomizeAddError(message);
@@ -505,17 +441,15 @@ export function useArtistDetailsLibrary({
     }
   };
 
-  const handleAddToLibrary = async (managedBy = libraryDestination.primary) =>
-    addArtistWithOptions(managedBy);
-
   const handleCustomizeAddToLibrary = async () => {
     const success = await addArtistWithOptions("lidarr", {
       rootFolderPath: customizeRootFolderPath || null,
       qualityProfileId: customizeQualityProfileId ? Number(customizeQualityProfileId) : null,
       tagId: customizeTagId ? Number(customizeTagId) : null,
-    });
+    }, customizeMonitorOption || null);
     if (success) {
       setShowAddCustomizeModal(false);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.artistMonitoring(artist?.id) });
     }
     return success;
   };
@@ -538,7 +472,7 @@ export function useArtistDetailsLibrary({
       const addedArtist = result?.artist;
       const addedAlbum = result?.album;
       if (!addedArtist?.id || !addedAlbum?.id) {
-        throw new Error(`${getManagerName(managedBy)} did not return the completed album request`);
+        throw new Error("The album request did not complete");
       }
 
       setLibraryArtist((previous) => ({
@@ -587,7 +521,7 @@ export function useArtistDetailsLibrary({
         return;
       }
       showError(
-        `Failed to add album to ${getManagerName(managedBy)}: ${
+        `Could not download the album: ${
           err.response?.data?.message || err.response?.data?.error || err.message
         }`,
       );
@@ -896,12 +830,7 @@ export function useArtistDetailsLibrary({
     showDeleteAlbumModal,
     deleteAlbumFiles,
     setDeleteAlbumFiles: updateDeleteFilesPreference,
-    showRemoveDropdown,
-    setShowRemoveDropdown,
-    showDeleteModal,
-    deleteFiles,
-    setDeleteFiles: updateDeleteFilesPreference,
-    deletingArtist: deleteArtistMutation.isPending,
+    reloadLibraryState,
     addingToLibrary: addArtistMutation.isPending,
     showAddCustomizeModal,
     customizeAddError,
@@ -914,20 +843,13 @@ export function useArtistDetailsLibrary({
     setCustomizeQualityProfileId,
     customizeTagId,
     setCustomizeTagId,
-    showMonitorOptionMenu,
-    setShowMonitorOptionMenu,
-    updatingMonitor: updateArtistMutation.isPending,
+    customizeMonitorOption,
+    setCustomizeMonitorOption,
     refreshingArtist,
     reSearchingAlbum,
     reSearchingMissingAlbums,
     downloadStatuses,
     handleRefreshArtist,
-    handleDeleteClick,
-    handleDeleteCancel,
-    handleDeleteConfirm,
-    handleUpdateMonitorOption,
-    getCurrentMonitorOption,
-    handleAddToLibrary,
     handleOpenAddCustomizeModal,
     handleCustomizeAddToLibrary,
     handleRequestAlbum,

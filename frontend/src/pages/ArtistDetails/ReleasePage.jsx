@@ -23,8 +23,12 @@ import { Link, useLocation, useParams } from "react-router";
 import { ExternalLink } from "lucide-react";
 import AddActionButton from "../../components/AddActionButton";
 import { useLibraryDestination } from "../../hooks/useLibraryDestination";
-import { buildAlbumAddAction, describeAlbumRequestResult } from "../../utils/albumAddAction";
-import { buildAlbumRequestPayload, getManagerName } from "../../utils/libraryDestination";
+import {
+  buildAlbumAddAction,
+  countReleaseTracks,
+  describeAlbumRequestResult,
+} from "../../utils/albumAddAction";
+import { buildAlbumRequestPayload } from "../../utils/libraryDestination";
 import { useAuth } from "../../contexts/AuthContext";
 import { useToast } from "../../contexts/ToastContext";
 import { useDocumentTitle } from "../../hooks/useDocumentTitle";
@@ -243,16 +247,15 @@ function ReleasePage() {
   const durationLabel = formatAlbumDuration(totalDurationMs);
   const metric = getReleaseMetric(release);
   const libraryDisplay = useMemo(
-    () => resolveReleaseLibraryDisplay(libraryInfo, downloadStatus),
-    [downloadStatus, libraryInfo],
+    () => resolveReleaseLibraryDisplay(
+      countReleaseTracks(libraryInfo, trackCount),
+      downloadStatus,
+    ),
+    [downloadStatus, libraryInfo, trackCount],
   );
   const isComplete = libraryDisplay.isComplete;
   const triggerSearch = libraryDisplay.triggerSearch;
-  const albumAddAction = buildAlbumAddAction(
-    triggerSearch,
-    libraryInfo?.managedBy,
-    libraryDestination,
-  );
+  const albumAddAction = buildAlbumAddAction(triggerSearch, libraryDestination);
   const lastfmUrl = artistName && releaseTitle ? buildLastfmAlbumUrl(artistName, releaseTitle) : "";
 
   const releaseMeta = [
@@ -513,7 +516,7 @@ function ReleasePage() {
         showInfo(`${release.title || "Album"}: ${conflict.message}`);
         return;
       }
-      showError(`Failed to add album to ${getManagerName(managedBy)}: ${
+      showError(`Could not download the album: ${
         err.response?.data?.message || err.response?.data?.error || err.message
       }`);
     } finally {

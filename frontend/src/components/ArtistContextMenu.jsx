@@ -1,9 +1,6 @@
 import { useState } from "react";
-import { Ban, Library, MoreVertical, Plus, RefreshCw, ThumbsDown, ThumbsUp } from "lucide-react";
+import { Ban, Library, MoreVertical, ThumbsDown, ThumbsUp } from "lucide-react";
 import { getDiscoveryFeedbackLabel } from "../utils/discoveryFeedback";
-import { getAddToManagerLabel } from "../utils/libraryDestination";
-import { useLibraryDestination } from "../hooks/useLibraryDestination";
-import AddActionButton from "./AddActionButton";
 import { LibraryItemMenu } from "./LibraryItemMenu";
 import TooltipButton from "./TooltipButton";
 import { DotLoader } from "./DotLoader";
@@ -12,8 +9,6 @@ export function ArtistContextMenu({
   artist,
   artistName,
   isInLibrary = false,
-  canAddArtist = false,
-  onAddToLibrary,
   onOpenInLibrary,
   onFeedback,
   feedbackUsed = {},
@@ -21,11 +16,9 @@ export function ArtistContextMenu({
   buttonClassName = "btn btn-icon-square artist-context-menu__trigger",
   menuLayout = "text",
 }) {
-  const destination = useLibraryDestination();
   const [pendingAction, setPendingAction] = useState(null);
   const labelName = artistName || artist?.name || artist?.artistName || "artist";
-  const canAdd = canAddArtist && onAddToLibrary && !isInLibrary;
-  const hasLibraryItem = canAdd || (isInLibrary && onOpenInLibrary);
+  const hasLibraryItem = isInLibrary && onOpenInLibrary;
   const feedbackItems = onFeedback ? [
     { id: "more_like_this", icon: ThumbsUp },
     { id: "less_like_this", icon: ThumbsDown },
@@ -38,30 +31,10 @@ export function ArtistContextMenu({
     onSelect: () => onFeedback(artist, item.id, { isSelected: !!feedbackUsed[item.id] }),
   })) : [];
 
-  const addArtist = async (manager) => {
-    if (!destination.ready || pendingAction) return;
-    setPendingAction("library");
-    try {
-      return await onAddToLibrary(artist, manager);
-    } finally {
-      setPendingAction(null);
-    }
-  };
-
-  const libraryItems = isInLibrary && onOpenInLibrary ? [{
+  const libraryItems = hasLibraryItem ? [{
     id: "open-library", label: "Open in library", icon: Library,
     onSelect: () => onOpenInLibrary(artist),
-  }] : canAdd ? destination.error ? [{
-    id: "retry-destinations", label: "Retry library destinations", icon: RefreshCw,
-    onSelect: () => destination.retry(),
-  }] : !destination.ready ? [{
-    id: "checking-destinations", label: "Checking library destinations", icon: Library, disabled: true,
-  }] : ["lidarr", "aurral"].filter(
-    (manager) => manager === destination.primary || manager === destination.alternative,
-  ).map((manager) => ({
-    id: manager, label: getAddToManagerLabel(manager), icon: Plus,
-    onSelect: () => addArtist(manager),
-  })) : [];
+  }] : [];
 
   if (!hasLibraryItem && !onFeedback) return null;
 
@@ -77,9 +50,7 @@ export function ArtistContextMenu({
     };
     return (
       <div className={`${className} artist-context-menu--inline`} onClick={(event) => event.stopPropagation()}>
-        {canAdd ? (
-          <AddActionButton destination={destination} onAdd={addArtist} isLoading={pendingAction === "library"} disabled={!!pendingAction} />
-        ) : isInLibrary && onOpenInLibrary ? (
+        {hasLibraryItem ? (
           <TooltipButton label="Open in library" onClick={() => onOpenInLibrary(artist)} className="btn btn-icon-square artist-context-menu__inline-action is-selected">
             <Library className="artist-icon-sm" />
           </TooltipButton>

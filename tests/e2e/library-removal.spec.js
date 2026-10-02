@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { apiRequest, openApp, requireCredentials } from "./helpers.js";
+import { apiRequest, openApp, requireCredentials, useAurralWithoutLidarr } from "./helpers.js";
 
 const artist = { mbid: "f22942a1-6f70-4f48-866e-238cb2308fbd", name: "Aphex Twin" };
 
@@ -29,24 +29,26 @@ async function ensureAurralArtist(page) {
   return record;
 }
 
-async function openRemovalDialog(page, itemName, dialogName) {
+async function openRemovalDialog(page, itemName, actionName) {
   await page.getByRole("button", { name: `${itemName} options` }).first().click();
-  await page.getByRole("menuitem", { name: "Remove from library" }).click();
+  await page.getByRole("menuitem", { name: actionName, exact: true }).click();
+  const dialogName = actionName;
   const dialog = page.getByRole("alertdialog", { name: dialogName });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
   return dialog;
 }
 
-test("an Aurral album and artist are removed with their files", async ({ page }) => {
+test("without Lidarr, an album and artist are deleted with their files", async ({ page }) => {
   test.setTimeout(240_000);
   await openApp(page);
+  const restoreLidarr = await useAurralWithoutLidarr(page);
 
   try {
     await ensureAurralArtist(page);
     await apiRequest(page, `/api/library/artists/${artist.mbid}`, {
       method: "PUT",
-      body: { monitored: false, monitorOption: "none" },
+      body: { monitorOption: "none" },
     });
 
     const details = await apiRequest(page, `/api/artists/${artist.mbid}`);
@@ -78,37 +80,27 @@ test("an Aurral album and artist are removed with their files", async ({ page })
       .toBe("aurral");
 
     await page.goto(`/library/album/${libraryAlbum.id}`);
-    const albumDialog = await openRemovalDialog(page, releaseGroup.title, "Remove album from library");
+    const albumDialog = await openRemovalDialog(page, releaseGroup.title, "Delete album");
     await albumDialog.getByLabel("Delete album files").check();
-    await albumDialog.getByRole("button", { name: "Remove album" }).click();
+    await albumDialog.getByRole("button", { name: "Delete album" }).click();
     await expect(albumDialog).toHaveCount(0, { timeout: 30_000 });
-    await expect(page.getByRole("status").filter({ hasText: "Album removed from library" })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: "Album deleted" })).toBeVisible();
     const albums = await apiRequest(page, `/api/library/albums?artistId=${artist.mbid}`);
     expect((albums.body || []).some((album) => album.mbid === releaseGroup.id)).toBe(false);
 
-    await page.goto(`/artist/${artist.mbid}`);
-    await expect(page.getByRole("heading", { name: artist.name, level: 1 })).toBeVisible({ timeout: 30_000 });
-    const actionBar = page.locator(".artist-action-bar");
-    await actionBar.getByRole("button", { name: /In library/ }).click();
-    await actionBar.getByRole("button", { name: "Remove from Library" }).click();
-    const artistDialog = page.getByRole("alertdialog", { name: "Remove Artist from Library" });
-    await expect(artistDialog).toBeVisible();
-    await expect(artistDialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+    const artistRecord = await apiRequest(page, `/api/library/artists/${artist.mbid}`);
+    await page.goto(`/library/artist/${artistRecord.body.id}`);
+    const artistDialog = await openRemovalDialog(page, artist.name, "Delete artist");
     await artistDialog.getByLabel("Delete artist files").check();
-    await artistDialog.getByRole("button", { name: "Remove Artist" }).click();
+    await artistDialog.getByRole("button", { name: "Delete artist" }).click();
     await expect(artistDialog).toHaveCount(0, { timeout: 30_000 });
-    await expect(
-      page.getByRole("status").filter({ hasText: `Successfully removed ${artist.name} from library and deleted files` }),
-    ).toBeVisible();
-
-    await page.reload();
-    await expect(page.getByRole("heading", { name: artist.name, level: 1 })).toBeVisible({ timeout: 30_000 });
-    await expect(actionBar.getByRole("button", { name: /In library/ })).toHaveCount(0);
+    await expect(page.getByRole("status").filter({ hasText: "Artist deleted" })).toBeVisible();
     expect((await apiRequest(page, `/api/library/artists/${artist.mbid}`)).status).toBe(404);
   } finally {
     const leftover = await apiRequest(page, `/api/library/artists/${artist.mbid}`);
     if (leftover.status !== 404 && leftover.body?.managedBy === "aurral") {
       await apiRequest(page, `/api/library/artists/${artist.mbid}?deleteFiles=true`, { method: "DELETE" });
     }
+    await restoreLidarr();
   }
 });
