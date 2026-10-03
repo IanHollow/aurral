@@ -178,7 +178,7 @@ async function runQueuedMonitoringTasks() {
 function queuedAlbumMbids() {
   return [...new Set(
     downloadTracker.getAll()
-      .filter((job) => job.playlistType === "library" && job.managedBy === "aurral")
+      .filter((job) => job.ownerId === "library" && job.managedBy === "aurral")
       .map((job) => job.albumMbid),
   )].sort();
 }

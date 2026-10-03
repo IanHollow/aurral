@@ -39,7 +39,7 @@ async function makeAlbum(group) {
   downloadTracker.setDownloading(ids[1]);
   return { folder, files, ids, payload: {
     source: "usenet", phase: "download", jobId: ids[0],
-    playlistId: "library", playlistGeneration: 0,
+    ownerId: "library", ownerGeneration: 0,
     destination: `The Band/${group}`, albumGrab: true, albumGroupJobIds: ids,
   } };
 }

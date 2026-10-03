@@ -200,8 +200,8 @@ test("deletes a library file committed while track removal waits for its lock", 
   const job = downloadTracker.getJob(jobId);
   const payload = {
     jobId,
-    playlistId: "library",
-    playlistGeneration: job.playlistGeneration,
+    ownerId: "library",
+    ownerGeneration: job.ownerGeneration,
   };
   let signalCommitEntered;
   let releaseCommit;
@@ -380,7 +380,7 @@ test("keeps a library job and track when provider cancellation fails, then retri
   );
   registerDownloadProviderWork({
     jobId,
-    playlistId: "library",
+    ownerId: "library",
     provider: "slskd-search",
     workId: searchId,
   });

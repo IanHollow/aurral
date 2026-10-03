@@ -5,7 +5,7 @@ import { resolveExistingTrackPath } from "../downloadPaths.js";
 
 export async function collectPlaybackPlaylistTracks(entityId) {
   const playlist = flowPlaylistConfig.getStaticPlaylist(entityId);
-  const jobs = (playlist ? getStaticPlaylistJobs(playlist) : downloadTracker.getByPlaylistType(entityId))
+  const jobs = (playlist ? getStaticPlaylistJobs(playlist) : downloadTracker.getByOwner(entityId))
     .filter((job) => job?.status === "done" && typeof job?.finalPath === "string");
   const tracks = [];
   for (const job of jobs) {

@@ -26,11 +26,11 @@ import {
   getAccessibleFlow,
   queueFlowSideEffect,
   enqueueResearchTrack,
-  LIBRARY_JOB_TYPE,
+  LIBRARY_OWNER,
 } from "./utils.js";
 import {
-  markPlaylistDownloadWorkCancelled,
-  restoreMarkedPlaylistDownloadWork,
+  markOwnerDownloadWorkCancelled,
+  restoreMarkedOwnerDownloadWork,
 } from "../../../services/downloadJobs/downloadCancellationService.js";
 import { logger } from "../../../services/logger.js";
 import {
@@ -243,8 +243,8 @@ export function registerFlows(router) {
       if (!getAccessibleFlow(req.user, flowId)) {
         return res.status(404).json({ error: "Flow not found" });
       }
-      const jobs = downloadTracker.getByPlaylistId(flowId);
-      const cancellation = markPlaylistDownloadWorkCancelled(flowId, jobs);
+      const jobs = downloadTracker.getAllForOwner(flowId);
+      const cancellation = markOwnerDownloadWorkCancelled(flowId, jobs);
       const mutation = markFlowMutationToken(flowId);
       let deleted;
       try {
@@ -256,7 +256,7 @@ export function registerFlows(router) {
           token: mutation.token,
         });
       } catch (error) {
-        restoreMarkedPlaylistDownloadWork(flowId, cancellation);
+        restoreMarkedOwnerDownloadWork(flowId, cancellation);
         restoreFlowMutationToken(mutation);
         throw error;
       }
@@ -315,8 +315,8 @@ export function registerFlows(router) {
         queueFlowSideEffect("enable-flow-refresh", "enable", flowId);
       } else {
         const wasEnabled = flow.enabled === true;
-        const jobs = downloadTracker.getByPlaylistId(flowId);
-        const cancellation = markPlaylistDownloadWorkCancelled(flowId, jobs);
+        const jobs = downloadTracker.getAllForOwner(flowId);
+        const cancellation = markOwnerDownloadWorkCancelled(flowId, jobs);
         flowPlaylistConfig.setEnabled(flowId, false);
         const mutation = markFlowMutationToken(flowId);
 
@@ -334,7 +334,7 @@ export function registerFlows(router) {
           if (!isFlowMutationTokenCurrent(mutation)) throw error;
           flowPlaylistConfig.setEnabled(flowId, wasEnabled);
           if (wasEnabled) flowPlaylistConfig.scheduleNextRun(flowId);
-          restoreMarkedPlaylistDownloadWork(flowId, cancellation);
+          restoreMarkedOwnerDownloadWork(flowId, cancellation);
           restoreFlowMutationToken(mutation);
           try {
             await playlistManager.ensureSmartPlaylists();
@@ -374,7 +374,7 @@ export function registerFlows(router) {
       }
 
       const requestedName = String(req.body?.name || "").trim();
-      const flowJobs = downloadTracker.getByPlaylistType(flowId);
+      const flowJobs = downloadTracker.getByOwner(flowId);
       const completedJobs = flowJobs.filter(
         (job) => job?.status === "done" && typeof job?.finalPath === "string",
       );
@@ -425,7 +425,7 @@ export function registerFlows(router) {
         if (!stat.isFile()) {
           throw new Error(`Track file is missing: ${job.finalPath}`);
         }
-        const jobId = downloadTracker.addJob(tracks[index], LIBRARY_JOB_TYPE, { queuedForPlaylist: true });
+        const jobId = downloadTracker.addJob(tracks[index], LIBRARY_OWNER, { queuedForPlaylist: true });
         if (!jobId) continue;
         createdJobIds.push(jobId);
         downloadTracker.setDone(jobId, safeSourcePath, job.albumName || null);
@@ -491,7 +491,7 @@ export function registerFlows(router) {
     }
     res.json({
       token: ensured.lidarrFeedToken,
-      itemCount: buildLidarrImportListItems(downloadTracker.getByPlaylistType(flowId)).length,
+      itemCount: buildLidarrImportListItems(downloadTracker.getByOwner(flowId)).length,
     });
   });
 }

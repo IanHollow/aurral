@@ -14,8 +14,8 @@ import { noCache } from "../../../middleware/cache.js";
 import { requireAdmin } from "../../../middleware/requirePermission.js";
 import {
   EXISTING_FILE_MODE_OPTIONS,
-  canAccessJobType,
-  canAccessPlaylistType,
+  canAccessJobOwner,
+  canAccessPlaylist,
   filterJobsForUser,
   getAccessibleJobIds,
 } from "./utils.js";
@@ -63,8 +63,8 @@ function getManualSearchMode(value) {
 function canAccessJobThroughPlaylist(user, job, playlistId) {
   const safePlaylistId = String(playlistId || "").trim();
   if (!safePlaylistId) return filterJobsForUser(user, [job]).length > 0;
-  if (!canAccessJobType(user, safePlaylistId)) return false;
-  if (job.playlistType === safePlaylistId || job.playlistId === safePlaylistId) return true;
+  if (!canAccessJobOwner(user, safePlaylistId)) return false;
+  if (job.ownerId === safePlaylistId) return true;
   return staticPlaylistReferencesJob(flowPlaylistConfig.getStaticPlaylist(safePlaylistId), job.id);
 }
 
@@ -103,7 +103,7 @@ export function registerJobs(router) {
 
   router.get("/jobs/:playlistId", noCache, async (req, res) => {
     const { playlistId } = req.params;
-    if (!canAccessPlaylistType(req.user, playlistId)) {
+    if (!canAccessPlaylist(req.user, playlistId)) {
       return res.status(404).json({ error: "Playlist not found" });
     }
     const rawLimit =
@@ -117,8 +117,8 @@ export function registerJobs(router) {
     let jobs = staticPlaylist
       ? getStaticPlaylistJobs(staticPlaylist)
         .slice(0, limit ?? undefined)
-        .map((job) => ({ ...job, playlistId, playlistType: playlistId }))
-      : downloadTracker.getByPlaylistType(playlistId, limit);
+        .map((job) => ({ ...job, playlistId }))
+      : downloadTracker.getByOwner(playlistId, limit);
     const profile = getQualityProfile();
     const accessibleJobs = filterJobsForUser(req.user, jobs).map((job) =>
       decorateJobQuality(job, profile),
@@ -258,7 +258,7 @@ export function registerJobs(router) {
 
   router.post("/quality-upgrades/:playlistId/:jobId", async (req, res) => {
     const { playlistId, jobId } = req.params;
-    if (!canAccessJobType(req.user, playlistId)) {
+    if (!canAccessJobOwner(req.user, playlistId)) {
       return res.status(404).json({ error: "Playlist not found" });
     }
     const job = downloadTracker.getJob(jobId);
@@ -381,23 +381,21 @@ export function registerJobs(router) {
 
   router.post("/reset", requireAdmin, async (req, res) => {
     try {
-      const { flowIds } = req.body;
-      const types =
-        flowIds || flowPlaylistConfig.getFlows().map((flow) => flow.id);
+      const flowIds = req.body?.flowIds || flowPlaylistConfig.getFlows().map((flow) => flow.id);
 
       await playlistOperationQueue.enqueuePayload({
-        kind: "reset-playlists",
+        kind: "reset-flows",
         label: "reset:manual",
-        playlistTypes: types,
+        flowIds,
       });
 
       res.json({
         success: true,
-        message: `Weekly reset completed for: ${types.join(", ")}`,
+        message: `Reset queued for: ${flowIds.join(", ")}`,
       });
     } catch (error) {
       res.status(500).json({
-        error: "Failed to perform weekly reset",
+        error: "Failed to reset flows",
         message: error.message,
       });
     }

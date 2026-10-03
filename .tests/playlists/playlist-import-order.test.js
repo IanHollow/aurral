@@ -613,7 +613,7 @@ test("flow refresh clears playback before downloads finish", async () => {
 
 test("a failed flow plan leaves the current playlist and jobs untouched", async () => {
   const originalBuildPlan = flowTrackSource.buildFlowRunPlan;
-  const originalReset = playlistManager.weeklyReset;
+  const originalReset = playlistManager.clearFlowFiles;
   let resets = 0;
   try {
     dbOps.updateSettings({
@@ -632,7 +632,7 @@ test("a failed flow plan leaves the current playlist and jobs untouched", async 
     flowPlaylistConfig.setEnabled(flow.id, true);
     const jobId = downloadTracker.addJob({ artistName: "Artist", trackName: "Track" }, flow.id);
     flowTrackSource.buildFlowRunPlan = async () => { throw new Error("Planning unavailable"); };
-    playlistManager.weeklyReset = async () => { resets += 1; };
+    playlistManager.clearFlowFiles = async () => { resets += 1; };
 
     await assert.rejects(
       processPlaylistOperation({ kind: "scheduled-flow-refresh", flowId: flow.id }),
@@ -642,7 +642,7 @@ test("a failed flow plan leaves the current playlist and jobs untouched", async 
     assert.ok(downloadTracker.getJob(jobId));
   } finally {
     flowTrackSource.buildFlowRunPlan = originalBuildPlan;
-    playlistManager.weeklyReset = originalReset;
+    playlistManager.clearFlowFiles = originalReset;
     downloadWorker.stop();
   }
 });
@@ -669,10 +669,10 @@ test("a stale flow plan does not cancel jobs when settings change during plannin
     });
     flowPlaylistConfig.setEnabled(flow.id, true);
     const jobId = downloadTracker.addJob({ artistName: "Artist", trackName: "Track" }, flow.id);
-    const { getPlaylistDownloadGeneration, isDownloadJobCancelled } = await importFromRepo(
+    const { getOwnerDownloadGeneration, isDownloadJobCancelled } = await importFromRepo(
       "backend/services/downloadJobs/downloadCancellation.js",
     );
-    const generationBeforePlanning = getPlaylistDownloadGeneration(flow.id);
+    const generationBeforePlanning = getOwnerDownloadGeneration(flow.id);
     flowTrackSource.buildFlowRunPlan = async () => {
       signalPlanning();
       return deferredPlan;
@@ -692,7 +692,7 @@ test("a stale flow plan does not cancel jobs when settings change during plannin
 
     await assert.rejects(refresh, /Flow settings changed while planning/);
     assert.equal(isDownloadJobCancelled(jobId), false);
-    assert.equal(getPlaylistDownloadGeneration(flow.id), generationBeforePlanning);
+    assert.equal(getOwnerDownloadGeneration(flow.id), generationBeforePlanning);
     assert.equal(downloadTracker.getJob(jobId)?.status, "pending");
   } finally {
     flowTrackSource.buildFlowRunPlan = originalBuildPlan;
@@ -703,7 +703,7 @@ test("a stale flow plan does not cancel jobs when settings change during plannin
 
 test("a queued flow stops before mutation when its owner becomes suspended", async () => {
   const originalBuildPlan = flowTrackSource.buildFlowRunPlan;
-  const originalReset = playlistManager.weeklyReset;
+  const originalReset = playlistManager.clearFlowFiles;
   let resets = 0;
   try {
     dbOps.updateSettings({
@@ -730,7 +730,7 @@ test("a queued flow stops before mutation when its owner becomes suspended", asy
         diagnostics: { targets: { primary: 0 }, achieved: { primary: 0, reserve: 0 } },
       };
     };
-    playlistManager.weeklyReset = async () => { resets += 1; };
+    playlistManager.clearFlowFiles = async () => { resets += 1; };
 
     const result = await processPlaylistOperation({
       kind: "scheduled-flow-refresh",
@@ -741,7 +741,7 @@ test("a queued flow stops before mutation when its owner becomes suspended", asy
     assert.equal(resets, 0);
   } finally {
     flowTrackSource.buildFlowRunPlan = originalBuildPlan;
-    playlistManager.weeklyReset = originalReset;
+    playlistManager.clearFlowFiles = originalReset;
     downloadWorker.stop();
   }
 });

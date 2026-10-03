@@ -13,25 +13,25 @@ const {
   idlePollS: 10,
   retryDelayS: 300,
   filterJob(job) {
-    const playlistType = String(job.payload?.playlistType || "").trim();
-    const scheduledJobId = playlistType
-      ? downloadWorker.getScheduledRetryJobId(playlistType)
+    const ownerId = String(job.payload?.ownerId || "").trim();
+    const scheduledJobId = ownerId
+      ? downloadWorker.getScheduledRetryJobId(ownerId)
       : null;
-    if (!playlistType || scheduledJobId !== job.id) {
+    if (!ownerId || scheduledJobId !== job.id) {
       return false;
     }
-    downloadWorker.markIncompleteRetryDequeued(playlistType, job.id);
+    downloadWorker.markIncompleteRetryDequeued(ownerId, job.id);
     return true;
   },
   processJob: (payload) =>
     withPlaylistMutationLock(
-      payload.playlistType,
-      () => downloadWorker.retryIncompletePlaylist(payload.playlistType),
+      payload.ownerId,
+      () => downloadWorker.retryIncompletePlaylist(payload.ownerId),
     ),
   onJobError(_error, job) {
-    const playlistType = String(job.payload?.playlistType || "").trim();
+    const ownerId = String(job.payload?.ownerId || "").trim();
     if (job.attempts < 4) {
-      downloadWorker.restoreScheduledRetryJobId(playlistType, job.id);
+      downloadWorker.restoreScheduledRetryJobId(ownerId, job.id);
     }
   },
 });

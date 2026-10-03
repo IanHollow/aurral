@@ -396,7 +396,7 @@ async function removeLibraryDownloadJobs(tracks, { albumMbid = null } = {}) {
   const jobs = downloadTracker.getAll();
   const removedJobIds = new Set();
   for (const job of jobs) {
-    if (job.playlistType !== "library") continue;
+    if (job.ownerId !== "library" || job.upgradeForJobId) continue;
     const jobTrackMbid = normalize(job.trackMbid);
     const belongsElsewhere = albumKey && (
       job.managedBy === "lidarr" ||

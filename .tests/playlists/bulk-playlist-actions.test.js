@@ -175,7 +175,7 @@ test("a restarted process resumes a destination already saved before source deta
   assert.equal(config.flowPlaylistConfig.getStaticPlaylists().length, 2);
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(target.id).tracks.length, 2);
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(f.source.id).tracks.length, 0);
-  assert.ok(f.jobs.every((job) => downloadTracker.getJob(job.id)?.playlistType === "library"));
+  assert.ok(f.jobs.every((job) => downloadTracker.getJob(job.id)?.ownerId === "library"));
 });
 
 test("partial provider failure preserves the failed membership and completes the other removals", async (t) => {
@@ -185,7 +185,7 @@ test("partial provider failure preserves the failed membership and completes the
   t.mock.method(client, "isConfigured", () => true);
   t.mock.method(client, "removeFromQueue", async () => false);
   downloadTracker.setDownloading(f.jobs[0].id);
-  honker.getPipelineQueue().enqueue({ jobId: f.jobs[0].id, playlistId: "library", playlistGeneration: 0, phase: "poll", source: "deemix", queueUuid: "refused-provider-work" });
+  honker.getPipelineQueue().enqueue({ jobId: f.jobs[0].id, ownerId: "library", ownerGeneration: 0, phase: "poll", source: "deemix", queueUuid: "refused-provider-work" });
   const result = await execute({ ownerUserId: f.user.id, sourcePlaylistId: f.source.id, action: "remove", selections: f.selections });
   assert.deepEqual(result.outcomes.map((outcome) => outcome.status), ["failed", "removed"]);
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(f.source.id).tracks.length, 1);
@@ -196,11 +196,11 @@ test("partial provider failure preserves the failed membership and completes the
 
 test("bulk leader removal hands its album download to an unselected held peer", async (t) => {
   const f = fixture(t, 2);
-  db.prepare("UPDATE playlist_download_jobs SET request_group_id = ?, album_mbid = ? WHERE id IN (?, ?)").run("disposable-album-group", "disposable-album", f.jobs[0].id, f.jobs[1].id);
+  db.prepare("UPDATE download_jobs SET request_group_id = ?, album_mbid = ? WHERE id IN (?, ?)").run("disposable-album-group", "disposable-album", f.jobs[0].id, f.jobs[1].id);
   downloadTracker.reconcileCommittedJobs();
   downloadTracker.setDownloading(f.jobs[1].id);
   downloadTracker.markSlskdDispatched(f.jobs[0].id);
-  honker.getPipelineQueue().enqueue({ jobId: f.jobs[0].id, playlistId: "library", playlistGeneration: 0, phase: "poll", source: "deemix",
+  honker.getPipelineQueue().enqueue({ jobId: f.jobs[0].id, ownerId: "library", ownerGeneration: 0, phase: "poll", source: "deemix",
     queueUuid: "album-work-needed-by-peer", albumGrab: true, albumGroupJobIds: f.jobs.map((job) => job.id) });
   const result = await execute({ ownerUserId: f.user.id, sourcePlaylistId: f.source.id, action: "remove", selections: [f.selections[0]] });
   assert.equal(result.outcomes[0].status, "removed");
@@ -242,7 +242,7 @@ test("failed provider cleanup leaves a retained quality upgrade recoverable", as
   const client = getDownloadClient("deemix");
   t.mock.method(client, "isConfigured", () => true);
   t.mock.method(client, "removeFromQueue", async () => false);
-  honker.getPipelineQueue().enqueue({ jobId: upgradeId, playlistId: "library", playlistGeneration: 0,
+  honker.getPipelineQueue().enqueue({ jobId: upgradeId, ownerId: "library", ownerGeneration: 0,
     phase: "poll", source: "deemix", queueUuid: "refused-upgrade-work" });
   const result = await execute({ ownerUserId: f.user.id, sourcePlaylistId: f.source.id, action: "remove", selections: f.selections });
   assert.equal(result.outcomes[0].status, "failed");

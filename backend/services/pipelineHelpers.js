@@ -82,7 +82,7 @@ export async function recordPipelineJobSuccess({
   if (downloadTracker.setDone(job.id, committedFinalPath, album) === false) return false;
   if (quality) downloadTracker.updateQuality(job.id, quality);
 
-  if (job.playlistType === "library" && job.managedBy === "aurral" && committedFinalPath) {
+  if (job.ownerId === "library" && job.managedBy === "aurral" && committedFinalPath) {
     const { scheduleLibraryScan } = await import("./libraryScanWorker.js");
     scheduleLibraryScan({
       includeLidarr: false,
@@ -104,10 +104,9 @@ export async function recordPipelineJobSuccess({
 }
 
 export async function refreshCompletedPipelinePlaylist(job) {
-  const playlistType = job.playlistId || job.playlistType;
   const { playlistManager } = await import("./playlists/playlistManager.js");
   await playlistManager.refreshPlaylistsForJobs([job]);
   const { downloadWorker } = await import("./downloadJobs/downloadWorker.js");
   downloadWorker.wake(0);
-  await downloadWorker.checkPlaylistComplete(playlistType);
+  await downloadWorker.checkPlaylistComplete(job.ownerId);
 }

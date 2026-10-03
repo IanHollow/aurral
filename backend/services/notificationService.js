@@ -257,12 +257,12 @@ export async function notifyDiscoveryUpdated() {
   await Promise.all(tasks);
 }
 
-export async function notifyFlowDone(playlistType, stats = {}, flowPath = "", flowName = "") {
+export async function notifyFlowDone(flowId, stats = {}, flowPath = "", flowName = "") {
   const settings = dbOps.getSettings();
   const gotify = settings.integrations?.gotify || {};
   const completed = stats.completed ?? 0;
   const failed = stats.failed ?? 0;
-  const displayName = String(flowName || playlistType || "").trim() || playlistType;
+  const displayName = String(flowName || flowId || "").trim() || flowId;
   const tasks = [];
   if (gotify.notifyFlowDone) {
     tasks.push(

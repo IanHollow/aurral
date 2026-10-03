@@ -75,7 +75,7 @@ const slskdClient = getDownloadClient("slskd");
 export { commitDownloadedFile };
 
 const updateSlskdMetaStmt = db.prepare(`
-  UPDATE playlist_download_jobs
+  UPDATE download_jobs
   SET slskd_search_id = COALESCE(?, slskd_search_id),
       slskd_batch_id = COALESCE(?, slskd_batch_id),
       remote_username = COALESCE(?, remote_username),
@@ -350,7 +350,7 @@ async function failJob(job, message) {
   try {
     const { downloadWorker } = await import("./downloadJobs/downloadWorker.js");
     downloadWorker.wake(0);
-    await downloadWorker.checkPlaylistComplete(job.playlistId || job.playlistType);
+    await downloadWorker.checkPlaylistComplete(job.ownerId);
   } catch (error) {
     logger.warn("slskd", "Failed to run post-failure playlist checks", {
       jobId: job.id,
@@ -766,7 +766,7 @@ async function runSearchQuery(
   const created = await slskdClient.createSearch(query, {
     shouldCancel: isCancelled,
     onSearchCreated: (id) => registerDownloadProviderWork({
-      jobId: workContext.jobId, playlistId: workContext.playlistId,
+      jobId: workContext.jobId, ownerId: workContext.ownerId,
       provider: "slskd-search", workId: id,
     }),
     onSearchSettled: (id) => clearDownloadProviderWork({ provider: "slskd-search", workId: id }),
@@ -854,7 +854,7 @@ async function handleSearch(payload) {
         aggregated,
         seen,
         () => !isPipelinePayloadActive(payload),
-        { jobId: payload.jobId, playlistId: payload.playlistId },
+        { jobId: payload.jobId, ownerId: payload.ownerId },
       );
       mergeSearchResults(aggregated, seen, results, (result) => `${result.user}\0${result.file}`);
       if (!isPipelinePayloadActive(payload)) return null;

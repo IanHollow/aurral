@@ -24,7 +24,7 @@ import {
   beginDownloadAttempt,
   setActiveDownloadAttemptId,
   cancelDownloadJobs,
-  getPlaylistDownloadGeneration,
+  getOwnerDownloadGeneration,
   isDownloadJobCancelled,
   isPipelinePayloadActive,
 } from "./downloadCancellation.js";
@@ -39,28 +39,27 @@ const parseDeniedSources = (raw) => {
   }
 };
 
-const JOBS_TABLE = "playlist_download_jobs";
+const JOBS_TABLE = "download_jobs";
 const dataVersionStmt = db.prepare("PRAGMA data_version");
 const persistedRevisionStmt = db.prepare(
-  "SELECT revision FROM playlist_download_jobs_revision WHERE id = 1",
+  "SELECT revision FROM download_jobs_revision WHERE id = 1",
 );
 const liveJobStmt = db.prepare(`SELECT * FROM ${JOBS_TABLE} WHERE id = ?`);
-const livePlaylistJobsStmt = db.prepare(
-  `SELECT * FROM ${JOBS_TABLE} WHERE playlist_type = ? ORDER BY created_at, id`,
+const liveOwnerJobsStmt = db.prepare(
+  `SELECT * FROM ${JOBS_TABLE} WHERE owner_id = ? AND upgrade_for_job_id IS NULL ORDER BY created_at, id`,
 );
-const livePlaylistIdJobsStmt = db.prepare(
-  `SELECT * FROM ${JOBS_TABLE}
-   WHERE playlist_id = ? OR playlist_type = ?
-   ORDER BY created_at, id`,
+const liveAllOwnerJobsStmt = db.prepare(
+  `SELECT * FROM ${JOBS_TABLE} WHERE owner_id = ? ORDER BY created_at, id`,
 );
-const livePlaylistJobsLimitedStmt = db.prepare(
-  `SELECT * FROM ${JOBS_TABLE} WHERE playlist_type = ? ORDER BY created_at, id LIMIT ?`,
+const liveOwnerJobsLimitedStmt = db.prepare(
+  `SELECT * FROM ${JOBS_TABLE} WHERE owner_id = ? AND upgrade_for_job_id IS NULL ORDER BY created_at, id LIMIT ?`,
 );
 const liveStatusJobsStmt = db.prepare(
   `SELECT * FROM ${JOBS_TABLE} WHERE status = ? ORDER BY created_at, id`,
 );
 const liveStatsStmt = db.prepare(
-  `SELECT playlist_type, status, COUNT(*) AS count FROM ${JOBS_TABLE} GROUP BY playlist_type, status`,
+  `SELECT owner_id, upgrade_for_job_id IS NOT NULL AS upgrade, status, COUNT(*) AS count
+   FROM ${JOBS_TABLE} GROUP BY owner_id, upgrade, status`,
 );
 const liveNextPendingStmt = db.prepare(
   `SELECT * FROM ${JOBS_TABLE} WHERE status = 'pending' AND upgrade_for_job_id IS NULL
@@ -74,8 +73,8 @@ const livePendingStmt = db.prepare(
   `SELECT * FROM ${JOBS_TABLE} WHERE status = 'pending' AND upgrade_for_job_id IS NULL
    ORDER BY created_at, id LIMIT ?`,
 );
-const liveActivePlaylistStmt = db.prepare(
-  `SELECT 1 FROM ${JOBS_TABLE} WHERE playlist_type = ?
+const liveActiveOwnerStmt = db.prepare(
+  `SELECT 1 FROM ${JOBS_TABLE} WHERE owner_id = ? AND upgrade_for_job_id IS NULL
    AND status IN ('pending', 'downloading') LIMIT 1`,
 );
 
@@ -98,9 +97,8 @@ function rowToJob(row) {
     albumTrackCount: normalizePositiveInteger(row.album_track_count),
     albumTrackTitles: parseStringListJson(row.album_track_titles),
     artistAliases: parseStringListJson(row.artist_aliases),
-    playlistId: row.playlist_id || row.playlist_type,
-    playlistGeneration: Number(row.playlist_generation ?? 0),
-    playlistType: row.playlist_type || row.playlist_id,
+    ownerId: row.owner_id,
+    ownerGeneration: Number(row.owner_generation ?? 0),
     managedBy: row.managed_by === "lidarr" ? "lidarr" : "aurral",
     requestGroupId: row.request_group_id || null,
     albumGrabAttempted: row.album_grab_attempted === 1,
@@ -154,9 +152,8 @@ const insertStmt = db.prepare(`
     album_track_count,
     album_track_titles,
     artist_aliases,
-    playlist_id,
-    playlist_generation,
-    playlist_type,
+    owner_id,
+    owner_generation,
     managed_by,
     request_group_id,
     status,
@@ -178,7 +175,7 @@ const insertStmt = db.prepare(`
     manual_replacement_search,
     queued_for_playlist
   )
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const updateStmt = db.prepare(`
@@ -272,18 +269,15 @@ const sortByCreatedAt = (jobs) =>
   });
 
 function buildPipelinePayload(job) {
-  const playlistId = job.playlistId || job.playlistType;
   const artistDir = sanitizePathPart(job.artistName, "Unknown Artist");
   const albumDir = sanitizePathPart(job.albumName, "Unknown Album");
-  const ephemeral = Boolean(
-    flowPlaylistConfig.getFlow(String(job.playlistId || job.playlistType || "").trim()),
-  );
+  const ephemeral = Boolean(flowPlaylistConfig.getFlow(job.ownerId));
   return {
     phase: "search",
     downloadAttemptId: beginDownloadAttempt(job.id),
     jobId: job.id,
-    playlistId,
-    playlistGeneration: job.playlistGeneration,
+    ownerId: job.ownerId,
+    ownerGeneration: job.ownerGeneration,
     track: {
       artistName: job.artistName,
       trackName: job.trackName,
@@ -299,7 +293,7 @@ function buildPipelinePayload(job) {
       artistAliases: job.artistAliases || [],
     },
     attempt: 0,
-    destination: buildAurralTrackDestination(playlistId, artistDir, albumDir, { ephemeral }),
+    destination: buildAurralTrackDestination(job.ownerId, artistDir, albumDir, { ephemeral }),
     upgrade: Boolean(job.upgradeForJobId) && !job.manualReplacementSearch,
     upgradeForJobId: job.upgradeForJobId || null,
     manualReplacementSearch: job.manualReplacementSearch === true,
@@ -314,7 +308,7 @@ export class DownloadTracker {
   constructor({ enqueuePipeline = enqueuePipelineJob } = {}) {
     this.enqueuePipeline = enqueuePipeline;
     this.jobs = new Map();
-    this.statsByPlaylistType = new Map();
+    this.statsByOwner = new Map();
     this.globalStats = this._emptyStats();
     this.pendingFreshQueue = [];
     this.pendingRetryQueue = [];
@@ -358,7 +352,7 @@ export class DownloadTracker {
       this.slskdDispatched.delete(fromJobId);
       if (dispatched && nextJobs.has(toJobId)) this.slskdDispatched.add(toJobId);
     }
-    this._rebuildStatsByPlaylistType();
+    this._rebuildStats();
     for (const id of previousRetryIds) {
       const job = nextJobs.get(id);
       if (!job || job.status !== "pending") continue;
@@ -477,7 +471,7 @@ export class DownloadTracker {
     if (job.status !== "pending" || this.isSlskdDispatched(jobId)) return false;
     const payload = buildPipelinePayload(job);
     if (!isPipelinePayloadActive(payload)) return false;
-    const siblings = job.managedBy === "aurral" && job.playlistType === "library"
+    const siblings = job.managedBy === "aurral" && job.ownerId === "library"
       && job.requestGroupId && !job.upgradeForJobId && !job.manualReplacementSearch
       && !job.albumGrabAttempted && isAlbumGrabSourceConfigured()
       ? this.getAll().filter((entry) => entry.requestGroupId === job.requestGroupId
@@ -607,19 +601,20 @@ export class DownloadTracker {
     };
   }
 
-  _getOrCreatePlaylistStats(playlistType) {
-    const key = String(playlistType || "");
-    let stats = this.statsByPlaylistType.get(key);
+  _getOrCreateOwnerStats(ownerId) {
+    const key = String(ownerId || "");
+    let stats = this.statsByOwner.get(key);
     if (!stats) {
       stats = this._emptyStats();
-      this.statsByPlaylistType.set(key, stats);
+      this.statsByOwner.set(key, stats);
     }
     return stats;
   }
 
-  _applyStatusDelta(playlistType, fromStatus, toStatus) {
-    if (playlistType) {
-      const stats = this._getOrCreatePlaylistStats(playlistType);
+  _applyStatusDelta(job, fromStatus, toStatus) {
+    const ownerId = job.upgradeForJobId ? null : job.ownerId;
+    if (ownerId) {
+      const stats = this._getOrCreateOwnerStats(ownerId);
       if (fromStatus && stats[fromStatus] > 0) {
         stats[fromStatus] -= 1;
         stats.total = Math.max(0, stats.total - 1);
@@ -629,7 +624,7 @@ export class DownloadTracker {
         stats.total += 1;
       }
       if (stats.total <= 0) {
-        this.statsByPlaylistType.delete(String(playlistType));
+        this.statsByOwner.delete(String(ownerId));
       }
     }
     if (fromStatus && this.globalStats[fromStatus] > 0) {
@@ -642,15 +637,15 @@ export class DownloadTracker {
     }
   }
 
-  _rebuildStatsByPlaylistType() {
-    this.statsByPlaylistType.clear();
+  _rebuildStats() {
+    this.statsByOwner.clear();
     this.globalStats = this._emptyStats();
     this.pendingFreshQueue = [];
     this.pendingRetryQueue = [];
     this.pendingSet = new Set();
     this.pendingRetrySet = new Set();
     for (const job of this.jobs.values()) {
-      this._applyStatusDelta(job.playlistType, null, job.status);
+      this._applyStatusDelta(job, null, job.status);
       if (job.status === "pending" && !job.upgradeForJobId) {
         this.pendingFreshQueue.push(job.id);
         this.pendingSet.add(job.id);
@@ -721,7 +716,7 @@ export class DownloadTracker {
         }
       }
     }
-    this._rebuildStatsByPlaylistType();
+    this._rebuildStats();
   }
 
   _insert(job) {
@@ -742,9 +737,8 @@ export class DownloadTracker {
       job.albumTrackCount ?? null,
       stringifyStringListJson(job.albumTrackTitles),
       stringifyStringListJson(job.artistAliases),
-      job.playlistId || job.playlistType,
-      job.playlistGeneration ?? 0,
-      job.playlistType || job.playlistId,
+      job.ownerId,
+      job.ownerGeneration ?? 0,
       job.managedBy === "lidarr" ? "lidarr" : "aurral",
       job.requestGroupId ?? null,
       job.status,
@@ -805,14 +799,13 @@ export class DownloadTracker {
     this._touchRevision();
   }
 
-  addJob(track, playlistType, options = {}) {
+  addJob(track, ownerId, options = {}) {
     const id = randomUUID();
     const artistName = String(track?.artistName || "").trim();
     const trackName = String(track?.trackName || "").trim();
     if (!artistName || !trackName) {
       return null;
     }
-    const playlistId = options?.playlistId || playlistType;
     const job = {
       id,
       artistName,
@@ -831,11 +824,12 @@ export class DownloadTracker {
       albumTrackCount: normalizePositiveInteger(track?.albumTrackCount),
       albumTrackTitles: normalizeStringList(track?.albumTrackTitles),
       artistAliases: normalizeStringList(track?.artistAliases),
-      playlistId,
-      playlistGeneration: Number.isInteger(options?.playlistGeneration)
-        ? options.playlistGeneration
-        : getPlaylistDownloadGeneration(playlistId),
-      playlistType,
+      ownerId,
+      ownerGeneration: Number.isInteger(options?.ownerGeneration)
+        ? options.ownerGeneration
+        : getOwnerDownloadGeneration(ownerId),
+      upgradeForJobId: options?.upgradeForJobId || null,
+      manualReplacementSearch: options?.manualReplacementSearch === true,
       managedBy: track?.managedBy === "lidarr" ? "lidarr" : "aurral",
       requestGroupId: track?.requestGroupId
         ? String(track.requestGroupId).trim() || null
@@ -853,10 +847,11 @@ export class DownloadTracker {
     };
     this.jobs.set(id, job);
     this._insert(job);
-    this._applyStatusDelta(playlistType, null, job.status);
-    this.pendingFreshQueue.push(id);
-    this.pendingSet.add(id);
-    this.pendingRetrySet.delete(id);
+    this._applyStatusDelta(job, null, job.status);
+    if (!job.upgradeForJobId) {
+      this.pendingFreshQueue.push(id);
+      this.pendingSet.add(id);
+    }
     return id;
   }
 
@@ -885,16 +880,15 @@ export class DownloadTracker {
     const id = this.addJob(
       { ...track, managedBy: "aurral", reason: track?.reason || "Aurral library track" },
       "library",
-      { playlistId: "library" },
     );
     if (!id || !this.setDone(id, resolvedPath, track?.albumName)) return null;
     return this.jobs.get(id) || null;
   }
 
-  addJobs(tracks, playlistType) {
+  addJobs(tracks, ownerId) {
     const ids = [];
     for (const track of tracks) {
-      const id = this.addJob(track, playlistType);
+      const id = this.addJob(track, ownerId);
       if (!id) continue;
       ids.push(id);
     }
@@ -917,36 +911,19 @@ export class DownloadTracker {
   addUpgradeJob(sourceJob) {
     if (!sourceJob?.id || sourceJob.status !== "done" || !sourceJob.finalPath) return null;
     if (this.findActiveUpgradeJob(sourceJob)) return null;
-    const playlistId = sourceJob.playlistId || sourceJob.playlistType;
-    const id = this.addJob(sourceJob, "quality-upgrade", {
-      playlistId,
-      playlistGeneration: sourceJob.playlistGeneration,
+    return this.addJob(sourceJob, sourceJob.ownerId, {
+      ownerGeneration: sourceJob.ownerGeneration,
+      upgradeForJobId: sourceJob.id,
     });
-    const job = this.jobs.get(id);
-    job.upgradeForJobId = sourceJob.id;
-    this.pendingSet.delete(id);
-    this.pendingRetrySet.delete(id);
-    this._removeFromPendingQueues(id);
-    this._update(job);
-    return id;
   }
 
   addReplacementSearchJob(sourceJob) {
     if (!sourceJob?.id || sourceJob.status !== "done" || !sourceJob.finalPath) return null;
     if (this.findActiveUpgradeJob(sourceJob)) return null;
-    const playlistId = sourceJob.playlistId || sourceJob.playlistType;
-    const id = this.addJob(sourceJob, "quality-upgrade", {
-      playlistId,
-      playlistGeneration: getPlaylistDownloadGeneration(playlistId),
+    return this.addJob(sourceJob, sourceJob.ownerId, {
+      upgradeForJobId: sourceJob.id,
+      manualReplacementSearch: true,
     });
-    const job = this.jobs.get(id);
-    job.upgradeForJobId = sourceJob.id;
-    job.manualReplacementSearch = true;
-    this.pendingSet.delete(id);
-    this.pendingRetrySet.delete(id);
-    this._removeFromPendingQueues(id);
-    this._update(job);
-    return id;
   }
 
   updateQuality(id, quality = {}) {
@@ -1081,13 +1058,13 @@ export class DownloadTracker {
     this.pendingSet.delete(id);
     this.pendingRetrySet.delete(id);
     this._removeFromPendingQueues(id);
-    this._applyStatusDelta(job.playlistType, job.status, null);
+    this._applyStatusDelta(job, job.status, null);
     deleteStmt.run(id);
     this._touchRevision();
     return true;
   }
 
-  _pickPendingFromQueue(queue, lastPlaylistType = null) {
+  _pickPendingFromQueue(queue, lastOwnerId = null) {
     let fallbackIndex = -1;
     for (let index = 0; index < queue.length; index += 1) {
       const nextId = queue[index];
@@ -1098,7 +1075,7 @@ export class DownloadTracker {
       if (!job || job.status !== "pending") {
         continue;
       }
-      if (lastPlaylistType && String(job.playlistType || "") === String(lastPlaylistType || "")) {
+      if (lastOwnerId && String(job.ownerId || "") === String(lastOwnerId || "")) {
         if (fallbackIndex === -1) fallbackIndex = index;
         continue;
       }
@@ -1122,15 +1099,15 @@ export class DownloadTracker {
     });
   }
 
-  getNextPending(lastPlaylistType = null) {
-    return this.getNextPendingMatching(() => true, lastPlaylistType);
+  getNextPending(lastOwnerId = null) {
+    return this.getNextPendingMatching(() => true, lastOwnerId);
   }
 
   _shouldSkipForWorker(job) {
     return job?.status === "pending" && this.isSlskdDispatched(job.id);
   }
 
-  getNextPendingMatching(predicate = null, lastPlaylistType = null) {
+  getNextPendingMatching(predicate = null, lastOwnerId = null) {
     const accepts = typeof predicate === "function" ? predicate : () => true;
     const canProcess = (job) =>
       job &&
@@ -1138,15 +1115,15 @@ export class DownloadTracker {
       !this._shouldSkipForWorker(job) &&
       isPipelinePayloadActive({
         jobId: job.id,
-        playlistId: job.playlistId || job.playlistType,
-        playlistGeneration: job.playlistGeneration,
+        ownerId: job.ownerId,
+        ownerGeneration: job.ownerGeneration,
       }) &&
       accepts(job);
     this.pendingFreshQueue = this._compactPendingQueue(this.pendingFreshQueue);
-    const nextFresh = this._pickPendingFromQueue(this.pendingFreshQueue, lastPlaylistType);
+    const nextFresh = this._pickPendingFromQueue(this.pendingFreshQueue, lastOwnerId);
     if (canProcess(nextFresh)) return nextFresh;
     this.pendingRetryQueue = this._compactPendingQueue(this.pendingRetryQueue);
-    const nextRetry = this._pickPendingFromQueue(this.pendingRetryQueue, lastPlaylistType);
+    const nextRetry = this._pickPendingFromQueue(this.pendingRetryQueue, lastOwnerId);
     if (canProcess(nextRetry)) return nextRetry;
     if (this.pendingSet.size > 0) {
       for (const id of this.pendingSet) {
@@ -1195,7 +1172,7 @@ export class DownloadTracker {
       job.stagingPath = stagingPath;
     }
     this._update(job);
-    this._applyStatusDelta(job.playlistType, previousStatus, job.status);
+    this._applyStatusDelta(job, previousStatus, job.status);
     return true;
   }
 
@@ -1214,7 +1191,7 @@ export class DownloadTracker {
     job.retryCycle = asRetryCycle;
     job.error = typeof error === "string" ? error : (error && error.message) || null;
     this._update(job);
-    this._applyStatusDelta(job.playlistType, previousStatus, job.status);
+    this._applyStatusDelta(job, previousStatus, job.status);
     this.pendingSet.add(id);
     this._removeFromPendingQueues(id);
     if (asRetryCycle) {
@@ -1260,7 +1237,7 @@ export class DownloadTracker {
     if (!job || job.status !== "downloading") return false;
     job.status = "cancel_requested";
     this._update(job);
-    this._applyStatusDelta(job.playlistType, "downloading", job.status);
+    this._applyStatusDelta(job, "downloading", job.status);
     return true;
   }
 
@@ -1280,7 +1257,7 @@ export class DownloadTracker {
     job.stagingPath = null;
     job.completedAt = Date.now();
     this._update(job);
-    this._applyStatusDelta(job.playlistType, previousStatus, job.status);
+    this._applyStatusDelta(job, previousStatus, job.status);
     return true;
   }
 
@@ -1304,7 +1281,7 @@ export class DownloadTracker {
       job.albumName = null;
     }
     this._update(job);
-    this._applyStatusDelta(job.playlistType, previousStatus, job.status);
+    this._applyStatusDelta(job, previousStatus, job.status);
     return true;
   }
 
@@ -1321,7 +1298,7 @@ export class DownloadTracker {
     job.completedAt = Date.now();
     job.error = typeof error === "string" ? error : (error && error.message) || null;
     this._update(job);
-    this._applyStatusDelta(job.playlistType, previousStatus, job.status);
+    this._applyStatusDelta(job, previousStatus, job.status);
     return true;
   }
 
@@ -1339,7 +1316,7 @@ export class DownloadTracker {
     job.error = typeof error === "string" ? error : (error && error.message) || null;
     if (stagingPath) job.stagingPath = stagingPath;
     this._update(job);
-    this._applyStatusDelta(job.playlistType, previousStatus, job.status);
+    this._applyStatusDelta(job, previousStatus, job.status);
     return true;
   }
 
@@ -1361,12 +1338,12 @@ export class DownloadTracker {
     return true;
   }
 
-  getByPlaylistType(playlistType, limit = null) {
+  getByOwner(ownerId, limit = null) {
     const jobs = [];
     const max =
       Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : null;
     for (const job of this.jobs.values()) {
-      if (job.playlistType === playlistType) {
+      if (job.ownerId === ownerId && !job.upgradeForJobId) {
         jobs.push(job);
         if (max != null && jobs.length >= max) {
           break;
@@ -1379,14 +1356,10 @@ export class DownloadTracker {
     return sortByCreatedAt(jobs);
   }
 
-  getByPlaylistId(playlistId) {
-    const safePlaylistId = String(playlistId || "").trim();
-    if (!safePlaylistId) return [];
-    return sortByCreatedAt(
-      [...this.jobs.values()].filter(
-        (job) => job.playlistId === safePlaylistId || job.playlistType === safePlaylistId,
-      ),
-    );
+  getAllForOwner(ownerId) {
+    const safeOwnerId = String(ownerId || "").trim();
+    if (!safeOwnerId) return [];
+    return sortByCreatedAt([...this.jobs.values()].filter((job) => job.ownerId === safeOwnerId));
   }
 
   getByStatus(status) {
@@ -1413,7 +1386,7 @@ export class DownloadTracker {
         job.startedAt = null;
         job.stagingPath = null;
         this._update(job);
-        this._applyStatusDelta(job.playlistType, previousStatus, job.status);
+        this._applyStatusDelta(job, previousStatus, job.status);
         this.pendingSet.add(job.id);
         this._removeFromPendingQueues(job.id);
         if (job.retryCycle === true) {
@@ -1429,9 +1402,9 @@ export class DownloadTracker {
     return count;
   }
 
-  hasActiveJobsForPlaylist(playlistType) {
+  hasActiveJobsForOwner(ownerId) {
     for (const job of this.jobs.values()) {
-      if (job.playlistType !== playlistType) continue;
+      if (job.ownerId !== ownerId || job.upgradeForJobId) continue;
       if (job.status === "pending" || job.status === "downloading") {
         return true;
       }
@@ -1439,11 +1412,11 @@ export class DownloadTracker {
     return false;
   }
 
-  failActiveJobsForPlaylist(playlistType, error = "Retry cycle paused") {
+  failActiveJobsForOwner(ownerId, error = "Retry cycle paused") {
     let count = 0;
     const failedJobs = [];
     for (const job of this.jobs.values()) {
-      if (job.playlistType !== playlistType) continue;
+      if (job.ownerId !== ownerId || job.upgradeForJobId) continue;
       if (job.status !== "pending" && job.status !== "downloading") continue;
       const previousStatus = job.status;
       this.clearSlskdPipelineState(job.id);
@@ -1457,7 +1430,7 @@ export class DownloadTracker {
       job.completedAt = Date.now();
       job.error = typeof error === "string" ? error : String(error || "");
       this._update(job);
-      this._applyStatusDelta(job.playlistType, previousStatus, job.status);
+      this._applyStatusDelta(job, previousStatus, job.status);
       failedJobs.push(job);
       count += 1;
     }
@@ -1500,26 +1473,24 @@ export class DownloadTracker {
     return this._cloneStats(this.globalStats);
   }
 
-  getStatsByPlaylistType(playlistTypes = []) {
-    const statsByType = {};
-    if (Array.isArray(playlistTypes) && playlistTypes.length > 0) {
-      for (const playlistType of playlistTypes) {
-        statsByType[playlistType] = this._cloneStats(
-          this.statsByPlaylistType.get(String(playlistType)) || this._emptyStats(),
+  getStatsByOwner(ownerIds = []) {
+    const statsByOwner = {};
+    if (Array.isArray(ownerIds) && ownerIds.length > 0) {
+      for (const ownerId of ownerIds) {
+        statsByOwner[ownerId] = this._cloneStats(
+          this.statsByOwner.get(String(ownerId)) || this._emptyStats(),
         );
       }
-      return statsByType;
+      return statsByOwner;
     }
-    for (const [playlistType, stats] of this.statsByPlaylistType.entries()) {
-      statsByType[playlistType] = this._cloneStats(stats);
+    for (const [ownerId, stats] of this.statsByOwner.entries()) {
+      statsByOwner[ownerId] = this._cloneStats(stats);
     }
-    return statsByType;
+    return statsByOwner;
   }
 
-  getPlaylistTypeStats(playlistType) {
-    return this._cloneStats(
-      this.statsByPlaylistType.get(String(playlistType)) || this._emptyStats(),
-    );
+  getOwnerStats(ownerId) {
+    return this._cloneStats(this.statsByOwner.get(String(ownerId)) || this._emptyStats());
   }
 
   _deleteJobsWhere(matches, { cleanPending = false } = {}) {
@@ -1540,7 +1511,7 @@ export class DownloadTracker {
       deleteStmt.run(id);
     }
     if (toDelete.length > 0) {
-      this._rebuildStatsByPlaylistType();
+      this._rebuildStats();
       this._touchRevision();
     }
     return toDelete.length;
@@ -1554,21 +1525,15 @@ export class DownloadTracker {
     );
   }
 
-  clearByPlaylistType(playlistType) {
-    return this._deleteJobsWhere((job) => job.playlistType === playlistType);
+  clearAllForOwner(ownerId) {
+    const safeOwnerId = String(ownerId || "").trim();
+    if (!safeOwnerId) return 0;
+    return this._deleteJobsWhere((job) => job.ownerId === safeOwnerId);
   }
 
-  clearByPlaylistId(playlistId) {
-    const safePlaylistId = String(playlistId || "").trim();
-    if (!safePlaylistId) return 0;
+  clearPendingByOwner(ownerId) {
     return this._deleteJobsWhere(
-      (job) => job.playlistId === safePlaylistId || job.playlistType === safePlaylistId,
-    );
-  }
-
-  clearPendingByPlaylistType(playlistType) {
-    return this._deleteJobsWhere(
-      (job) => job.playlistType === playlistType && job.status === "pending",
+      (job) => job.ownerId === ownerId && !job.upgradeForJobId && job.status === "pending",
       { cleanPending: true },
     );
   }
@@ -1576,7 +1541,7 @@ export class DownloadTracker {
   clearAll() {
     const count = this.jobs.size;
     this.jobs.clear();
-    this.statsByPlaylistType.clear();
+    this.statsByOwner.clear();
     this.globalStats = this._emptyStats();
     this.pendingFreshQueue = [];
     this.pendingRetryQueue = [];
@@ -1604,16 +1569,14 @@ function readTrackerFromDatabase(name, args) {
     return row ? rowToJob(row) : null;
   }
   if (name === "getAll") return liveJobs(selectAllStmt.all());
-  if (name === "getByPlaylistType") {
+  if (name === "getByOwner") {
     const limit = Number(second);
     const rows = Number.isFinite(limit) && limit > 0
-      ? livePlaylistJobsLimitedStmt.all(first ?? null, Math.floor(limit))
-      : livePlaylistJobsStmt.all(first ?? null);
+      ? liveOwnerJobsLimitedStmt.all(first ?? null, Math.floor(limit))
+      : liveOwnerJobsStmt.all(first ?? null);
     return liveJobs(rows);
   }
-  if (name === "getByPlaylistId") {
-    return liveJobs(livePlaylistIdJobsStmt.all(first ?? null, first ?? null));
-  }
+  if (name === "getAllForOwner") return liveJobs(liveAllOwnerJobsStmt.all(first ?? null));
   if (name === "getByStatus") return liveJobs(liveStatusJobsStmt.all(first ?? null));
   if (name === "getDoneWithFinalPath") {
     const limit = Number.isFinite(Number(first)) && Number(first) > 0 ? Math.floor(Number(first)) : 500;
@@ -1627,35 +1590,35 @@ function readTrackerFromDatabase(name, args) {
     const limit = Number.isFinite(Number(first)) && Number(first) > 0 ? Math.floor(Number(first)) : 10;
     return liveJobs(livePendingStmt.all(limit));
   }
-  if (name === "hasActiveJobsForPlaylist") {
-    return !!liveActivePlaylistStmt.get(first ?? null);
+  if (name === "hasActiveJobsForOwner") {
+    return !!liveActiveOwnerStmt.get(first ?? null);
   }
   if (name === "getRevision") return persistedRevisionStmt.get()?.revision || 0;
-  if (name === "getStats" || name === "getStatsByPlaylistType" || name === "getPlaylistTypeStats") {
-    const byPlaylist = {};
+  if (name === "getStats" || name === "getStatsByOwner" || name === "getOwnerStats") {
+    const byOwner = {};
     const totals = emptyLiveStats();
     for (const row of liveStatsStmt.all()) {
       const count = Number(row.count) || 0;
-      if (!byPlaylist[row.playlist_type]) byPlaylist[row.playlist_type] = emptyLiveStats();
-      if (row.status in totals) {
-        byPlaylist[row.playlist_type][row.status] += count;
-        byPlaylist[row.playlist_type].total += count;
-        totals[row.status] += count;
-        totals.total += count;
-      }
+      if (!(row.status in totals)) continue;
+      totals[row.status] += count;
+      totals.total += count;
+      if (row.upgrade) continue;
+      byOwner[row.owner_id] ??= emptyLiveStats();
+      byOwner[row.owner_id][row.status] += count;
+      byOwner[row.owner_id].total += count;
     }
     if (name === "getStats") return totals;
-    if (name === "getPlaylistTypeStats") return byPlaylist[String(first)] || emptyLiveStats();
-    if (!Array.isArray(first) || first.length === 0) return byPlaylist;
-    return Object.fromEntries(first.map((id) => [id, byPlaylist[id] || emptyLiveStats()]));
+    if (name === "getOwnerStats") return byOwner[String(first)] || emptyLiveStats();
+    if (!Array.isArray(first) || first.length === 0) return byOwner;
+    return Object.fromEntries(first.map((id) => [id, byOwner[id] || emptyLiveStats()]));
   }
   return undefined;
 }
 
 const LIVE_READ_METHODS = new Set([
-  "getJob", "getAll", "getByPlaylistType", "getByPlaylistId", "getByStatus", "getDoneWithFinalPath",
-  "getNextPending", "peekPending", "hasActiveJobsForPlaylist", "getRevision",
-  "getStats", "getStatsByPlaylistType", "getPlaylistTypeStats",
+  "getJob", "getAll", "getByOwner", "getAllForOwner", "getByStatus", "getDoneWithFinalPath",
+  "getNextPending", "peekPending", "hasActiveJobsForOwner", "getRevision",
+  "getStats", "getStatsByOwner", "getOwnerStats",
 ]);
 
 for (const name of Object.getOwnPropertyNames(DownloadTracker.prototype)) {

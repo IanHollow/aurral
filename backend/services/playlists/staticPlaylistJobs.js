@@ -64,7 +64,7 @@ export function getReleasedUnfinishedJobs(playlist, jobIds) {
 }
 
 export function findLibraryJob(track) {
-  const jobs = downloadTracker.getByPlaylistType(LIBRARY_OWNER).filter((job) => tracksShareMembership(job, track));
+  const jobs = downloadTracker.getByOwner(LIBRARY_OWNER).filter((job) => tracksShareMembership(job, track));
   return (
     jobs.find((job) => ACTIVE_STATUSES.includes(job.status)) ||
     jobs.find((job) => job.status === "done") ||
@@ -87,7 +87,7 @@ async function linkTrack(track, { existingFileMode, downloadRoot }) {
       const reuse = await reuseTrackForPlaylist(track, LIBRARY_OWNER, {
         existingFileMode,
         downloadRoot,
-        targetPlaylistType: LIBRARY_OWNER,
+        targetOwnerId: LIBRARY_OWNER,
         skipHistory: true,
       });
       if (reuse.reused) return { jobId: reuse.jobId, reused: true };
@@ -226,7 +226,7 @@ export async function commitStaticPlaylistTracks({
     db.transaction(() => {
       for (const plan of plans) {
         if (plan.action === "keep") {
-          db.prepare("UPDATE playlist_download_jobs SET queued_for_playlist = 0 WHERE id = ?").run(plan.job.id);
+          db.prepare("UPDATE download_jobs SET queued_for_playlist = 0 WHERE id = ?").run(plan.job.id);
         } else if (plan.action === "handover") {
           redirects.push(replaceAlbumDownloadLeaderInTransaction(plan.job.id, plan.peer.id));
         } else if (plan.action === "delete" || plan.action === "cancel") {
@@ -235,7 +235,7 @@ export async function commitStaticPlaylistTracks({
             dbOps.setJSONSetting(`${REMOVED_MEDIA_PREFIX}${job.id}`, { playlistId, finalPath: job.finalPath });
           }
           for (const entry of [job, ...plan.upgrades]) {
-            db.prepare("DELETE FROM playlist_download_jobs WHERE id = ?").run(entry.id);
+            db.prepare("DELETE FROM download_jobs WHERE id = ?").run(entry.id);
           }
         }
       }

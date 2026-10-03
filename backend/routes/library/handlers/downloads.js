@@ -387,7 +387,7 @@ export const getActiveLibraryDownloads = async () => {
   const artists = new Set();
   const tracks = [];
   for (const job of downloadTracker.getAll()) {
-    if (job.playlistType !== "library" || !ACTIVE_LIBRARY_JOB_STATUSES.has(job.status)) continue;
+    if (job.ownerId !== "library" || job.upgradeForJobId || !ACTIVE_LIBRARY_JOB_STATUSES.has(job.status)) continue;
     tracks.push({
       mbid: job.trackMbid || null,
       artistName: job.artistName,
@@ -473,7 +473,7 @@ export function registerDownloads(router) {
 
     try {
       const requestedJobs = downloadTracker.getAll().filter((job) => {
-        if (job.playlistType !== "library") return false;
+        if (job.ownerId !== "library" || job.upgradeForJobId) return false;
         if (track.trackMbid) return job.trackMbid === track.trackMbid;
         return (
           job.artistName?.toLocaleLowerCase() === track.artistName.toLocaleLowerCase() &&
@@ -536,7 +536,7 @@ export function registerDownloads(router) {
           ),
           downloadRoot: downloadWorker.downloadRoot,
           existingJobId: jobId,
-          targetPlaylistType: "library",
+          targetOwnerId: "library",
           skipHistory: true,
         });
         if (reuse.reused) {

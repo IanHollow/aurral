@@ -49,9 +49,9 @@ const [
 );
 
 const {
-  activatePlaylistDownloadGeneration,
-  cancelPlaylistDownloadGeneration,
-  getPlaylistDownloadGeneration,
+  activateOwnerDownloadGeneration,
+  cancelOwnerDownloadGeneration,
+  getOwnerDownloadGeneration,
   isPipelinePayloadActive,
   withPipelineCommitLock,
   clearDownloadProviderWork,
@@ -278,7 +278,7 @@ test("approving a reviewed download responds before publishing, and the publish 
     await publishEntered;
     assert.equal(downloadTracker.getJob(jobId)?.status, "done");
     const pipelineCommit = withPipelineCommitLock(
-      { jobId, playlistId, playlistGeneration: downloadTracker.getJob(jobId).playlistGeneration },
+      { jobId, ownerId: playlistId, ownerGeneration: downloadTracker.getJob(jobId).ownerGeneration },
       async () => "committed",
     );
     const state = await Promise.race([
@@ -321,8 +321,8 @@ test("approving a library track does not wait for another library track's downlo
   const releaseStep = Promise.withResolvers();
   const step = processOrchestratorJob({
     jobId: searchingJobId,
-    playlistId: "library",
-    playlistGeneration: downloadTracker.getJob(searchingJobId).playlistGeneration,
+    ownerId: "library",
+    ownerGeneration: downloadTracker.getJob(searchingJobId).ownerGeneration,
   }, {
     async processPipelinePayload() {
       stepStarted.resolve();
@@ -418,9 +418,9 @@ test("approval cannot commit an orphaned job into a recreated playlist", async (
     name: "Reviewed stale generation",
     tracks: [],
   });
-  activatePlaylistDownloadGeneration(playlistId);
-  cancelPlaylistDownloadGeneration(playlistId);
-  const cancelledGeneration = getPlaylistDownloadGeneration(playlistId);
+  activateOwnerDownloadGeneration(playlistId);
+  cancelOwnerDownloadGeneration(playlistId);
+  const cancelledGeneration = getOwnerDownloadGeneration(playlistId);
 
   const sourcePath = path.join(isolatedState.baseDir, "review", "Stale Track.flac");
   await fs.mkdir(path.dirname(sourcePath), { recursive: true });
@@ -432,7 +432,7 @@ test("approval cannot commit an orphaned job into a recreated playlist", async (
   downloadTracker.setBlocked(jobId, "blocked-duration-mismatch", sourcePath);
 
   assert.equal(
-    activatePlaylistDownloadGeneration(playlistId),
+    activateOwnerDownloadGeneration(playlistId),
     cancelledGeneration + 1,
   );
 
@@ -459,8 +459,8 @@ test("clearing all jobs waits for an in-flight playlist import to finish", async
   );
   const payload = {
     jobId,
-    playlistId,
-    playlistGeneration: downloadTracker.getJob(jobId).playlistGeneration,
+    ownerId: playlistId,
+    ownerGeneration: downloadTracker.getJob(jobId).ownerGeneration,
   };
   const sourcePath = path.join(isolatedState.baseDir, "clear-all-race", "Track.flac");
   const finalPath = path.join(process.env.DOWNLOAD_FOLDER, "clear-all-race", "Track.flac");
@@ -540,7 +540,7 @@ test("failed clear-all leaves jobs stopped and visible so provider cleanup can b
   );
   registerDownloadProviderWork({
     jobId,
-    playlistId,
+    ownerId: playlistId,
     provider: "slskd-search",
     workId: "clear-all-retry-search",
   });
@@ -561,7 +561,7 @@ test("failed clear-all leaves jobs stopped and visible so provider cleanup can b
     assert.equal(stoppedJob.status, "failed");
     assert.match(stoppedJob.error, /provider cancellation pending/i);
     assert.equal(
-      isPipelinePayloadActive({ jobId, playlistId, playlistGeneration: 0 }),
+      isPipelinePayloadActive({ jobId, ownerId: playlistId, ownerGeneration: 0 }),
       false,
     );
     assert.equal(listDownloadProviderWork({ jobIds: [jobId] }).length, 1);

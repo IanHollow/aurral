@@ -6,11 +6,11 @@ import { hasPermission, verifyTokenAuth } from "../../../middleware/auth.js";
 import {
   resolveExistingTrackPath,
 } from "../../../services/downloadPaths.js";
-import { canAccessPlaylistType } from "./utils.js";
+import { canAccessPlaylist } from "./utils.js";
 import { flowPlaylistConfig } from "../../../services/playlists/flowPlaylistConfig.js";
 
 const canAccessJob = (user, job) =>
-  canAccessPlaylistType(user, job.playlistType) ||
+  canAccessPlaylist(user, job.ownerId) ||
   flowPlaylistConfig.getStaticPlaylistsForUser(user).some((playlist) =>
     playlist.tracks?.some(
       (track) => String(track?.jobId || "") === String(job.id || ""),

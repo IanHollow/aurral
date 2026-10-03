@@ -149,8 +149,8 @@ export const getAccessibleFlow = (user, flowId) =>
 export const getAccessibleStaticPlaylist = (user, playlistId) =>
   flowPlaylistConfig.getStaticPlaylistForUser(user, playlistId);
 
-export const canAccessPlaylistType = (user, playlistType) => {
-  const key = String(playlistType || "").trim();
+export const canAccessPlaylist = (user, playlistId) => {
+  const key = String(playlistId || "").trim();
   if (!key) return false;
   const flow = flowPlaylistConfig.getFlow(key);
   if (flow) {
@@ -163,14 +163,14 @@ export const canAccessPlaylistType = (user, playlistType) => {
   return false;
 };
 
-export const LIBRARY_JOB_TYPE = "library";
+export const LIBRARY_OWNER = "library";
 
-export const canAccessJobType = (user, playlistType) =>
-  playlistType === LIBRARY_JOB_TYPE || canAccessPlaylistType(user, playlistType);
+export const canAccessJobOwner = (user, ownerId) =>
+  ownerId === LIBRARY_OWNER || canAccessPlaylist(user, ownerId);
 
 export const filterJobsForUser = (user, jobs) =>
   (Array.isArray(jobs) ? jobs : []).filter((job) =>
-    canAccessJobType(user, job?.playlistId || job?.playlistType),
+    canAccessJobOwner(user, job?.playlistId || job?.ownerId),
   );
 
 export const getAccessibleJobIds = (user) => {
@@ -184,9 +184,9 @@ export const getAccessibleJobIds = (user) => {
   }
   const flowIds = new Set(flowPlaylistConfig.getFlowsForUser(user).map((flow) => flow.id));
   return downloadTracker.getAll()
-    .filter((job) => job.playlistId === LIBRARY_JOB_TYPE
+    .filter((job) => job.ownerId === LIBRARY_OWNER
       ? visible.has(job.id) || !hidden.has(job.id)
-      : flowIds.has(job.playlistId))
+      : flowIds.has(job.ownerId))
     .map((job) => job.id);
 };
 
@@ -208,7 +208,7 @@ export const queueFlowSideEffect = (kind, labelPrefix, flowId) => {
 };
 
 export const enqueueResearchTrack = async (req, res, playlistId, jobId, labelPrefix) => {
-  if (!canAccessJobType(req.user, playlistId)) {
+  if (!canAccessJobOwner(req.user, playlistId)) {
     return res.status(404).json({ error: "Playlist not found" });
   }
 
@@ -216,7 +216,7 @@ export const enqueueResearchTrack = async (req, res, playlistId, jobId, labelPre
   const staticPlaylist = flowPlaylistConfig.getStaticPlaylist(playlistId);
   const belongs = staticPlaylist
     ? staticPlaylistReferencesJob(staticPlaylist, jobId)
-    : job?.playlistType === playlistId;
+    : job?.ownerId === playlistId && !job.upgradeForJobId;
   if (!job || !belongs) {
     return res.status(404).json({ error: "Track not found" });
   }

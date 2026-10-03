@@ -288,11 +288,75 @@ function renameQueuedWork(db) {
       continue;
     }
     if (!payload || typeof payload !== "object") continue;
+    if (payload.kind === "reset-playlists") {
+      const { playlistTypes, ...rest } = payload;
+      updatePayload.run(JSON.stringify({ ...rest, kind: "reset-flows", flowIds: playlistTypes }), row.id);
+      continue;
+    }
     const kind = RENAMED_TASK_KINDS[payload.kind] || renamePrefix(payload.kind, "shared-playlist-", "static-playlist-");
     const label = renamePrefix(payload.label, "shared-playlist:", "static-playlist:");
     if (kind !== payload.kind || label !== payload.label) {
       updatePayload.run(JSON.stringify({ ...payload, kind, ...(label === undefined ? {} : { label }) }), row.id);
     }
+  }
+}
+
+function renameDownloadTables(db) {
+  db.exec(`
+    DELETE FROM playlist_download_jobs WHERE playlist_type = 'quality-upgrade' AND upgrade_for_job_id IS NULL;
+    UPDATE playlist_download_jobs SET playlist_id = playlist_type
+    WHERE playlist_id = '' AND playlist_type IS NOT NULL AND playlist_type != 'quality-upgrade';
+    UPDATE playlist_download_jobs SET playlist_id = COALESCE((
+      SELECT source.playlist_id FROM playlist_download_jobs AS source
+      WHERE source.id = playlist_download_jobs.upgrade_for_job_id
+    ), '') WHERE playlist_id = '' AND upgrade_for_job_id IS NOT NULL;
+    DROP TRIGGER IF EXISTS playlist_download_jobs_revision_insert;
+    DROP TRIGGER IF EXISTS playlist_download_jobs_revision_update;
+    DROP TRIGGER IF EXISTS playlist_download_jobs_revision_delete;
+    DROP TRIGGER IF EXISTS playlist_download_attempt_delete;
+    DROP TRIGGER IF EXISTS playlist_download_attempt_complete;
+    DROP INDEX IF EXISTS idx_playlist_download_jobs_status;
+    DROP INDEX IF EXISTS idx_playlist_download_jobs_playlist_id;
+    DROP INDEX IF EXISTS idx_playlist_download_jobs_request_group;
+    DROP INDEX IF EXISTS idx_weekly_flow_download_job_cancellations_time;
+    DROP INDEX IF EXISTS idx_weekly_flow_download_provider_work_job;
+    DROP INDEX IF EXISTS idx_weekly_flow_download_provider_work_playlist;
+    ALTER TABLE playlist_download_jobs RENAME TO download_jobs;
+    ALTER TABLE download_jobs RENAME COLUMN playlist_id TO owner_id;
+    ALTER TABLE download_jobs RENAME COLUMN playlist_generation TO owner_generation;
+    ALTER TABLE download_jobs DROP COLUMN playlist_type;
+    ALTER TABLE playlist_download_jobs_revision RENAME TO download_jobs_revision;
+    ALTER TABLE weekly_flow_download_cancellations RENAME TO download_owner_cancellations;
+    ALTER TABLE download_owner_cancellations RENAME COLUMN playlist_id TO owner_id;
+    ALTER TABLE weekly_flow_download_job_cancellations RENAME TO download_job_cancellations;
+    ALTER TABLE weekly_flow_download_provider_work RENAME TO download_provider_work;
+    ALTER TABLE download_provider_work RENAME COLUMN playlist_id TO owner_id;
+    DELETE FROM settings WHERE key GLOB 'downloadJobTransfers:*';
+  `);
+  const flowIds = new Set(readJsonSetting(db, "flows", []).map((flow) => flow?.id).filter(Boolean));
+  for (const { key } of db.prepare("SELECT key FROM settings WHERE key GLOB 'playlistCancellationWork:*'").all()) {
+    const ownerId = key.slice("playlistCancellationWork:".length);
+    if (ownerId === LIBRARY_OWNER || flowIds.has(ownerId)) {
+      db.prepare("UPDATE settings SET key = ? WHERE key = ?").run(`ownerCancellationWork:${ownerId}`, key);
+    } else {
+      db.prepare("DELETE FROM settings WHERE key = ?").run(key);
+    }
+  }
+  if (!hasTable(db, "_honker_live")) return;
+  const updatePayload = db.prepare("UPDATE _honker_live SET payload = ? WHERE id = ?");
+  for (const row of db.prepare("SELECT id, queue, payload FROM _honker_live WHERE queue IN ('slskd-pipeline', 'playlist-retry')").all()) {
+    let payload;
+    try {
+      payload = JSON.parse(row.payload);
+    } catch {
+      continue;
+    }
+    if (!payload || typeof payload !== "object") continue;
+    const { playlistId, playlistGeneration, playlistType, ...rest } = payload;
+    const next = row.queue === "playlist-retry"
+      ? { ...rest, ownerId: playlistType || playlistId }
+      : { ...rest, ownerId: playlistId, ownerGeneration: playlistGeneration };
+    updatePayload.run(JSON.stringify(next), row.id);
   }
 }
 
@@ -302,6 +366,7 @@ export function upgradeFromAurral2(db) {
   removeRetiredIntegrations(db);
   moveStaticPlaylistJobsIntoLibrary(db);
   renameQueuedWork(db);
+  renameDownloadTables(db);
   db.exec(`
     UPDATE users SET permissions = replace(permissions, '"accessFlow"', '"accessPlaylists"');
     UPDATE settings SET value = replace(value, '"notifyWeeklyFlowDone"', '"notifyFlowDone"') WHERE key = 'integrations';

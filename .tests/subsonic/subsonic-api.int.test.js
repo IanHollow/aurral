@@ -609,7 +609,7 @@ test("creates durable Subsonic playlists around one promoted library job", async
   assert.equal(jobIdFromSong(second.entry[0].id), jobId);
 
   await waitFor(() => db.prepare(
-    "SELECT status FROM playlist_download_jobs WHERE id = ?",
+    "SELECT status FROM download_jobs WHERE id = ?",
   ).get(jobId)?.status === "done");
   const firstReady = await waitFor(async () => {
     const result = responseJson(await request("getPlaylist", { id: first.id }));
@@ -621,7 +621,7 @@ test("creates durable Subsonic playlists around one promoted library job", async
   assert.equal(stream.body, "0123456789");
 
   const libraryJobs = db.prepare(
-    "SELECT id, final_path AS finalPath FROM playlist_download_jobs WHERE playlist_type = ? AND track_name = ?",
+    "SELECT id, final_path AS finalPath FROM download_jobs WHERE owner_id = ? AND track_name = ?",
   ).all("library", "Flow Song");
   assert.equal(libraryJobs.length, 1);
 
@@ -633,7 +633,7 @@ test("creates durable Subsonic playlists around one promoted library job", async
   const aurralJobs = await aurralJobsResponse.json();
   assert.equal(aurralJobs.length, 1);
   assert.equal(aurralJobs[0].id, jobId);
-  assert.equal(aurralJobs[0].playlistType, aurralPlaylistId);
+  assert.equal(aurralJobs[0].playlistId, aurralPlaylistId);
   assert.equal(
     (await apiFetch(`/api/playlists/stream/${encodeURIComponent(jobId)}`)).status,
     200,
@@ -666,10 +666,10 @@ test("creates durable Subsonic playlists around one promoted library job", async
 
 test("failed Subsonic playlist creation rolls back its playlist and jobs", async () => {
   const flow = flowPlaylistConfig.getFlows().find((entry) => entry.name === "Favorite Toggle Flow");
-  const flowJob = downloadTracker.getByPlaylistType(flow.id)[0];
+  const flowJob = downloadTracker.getByOwner(flow.id)[0];
   const songId = `flow-song:${encodeURIComponent(`${flow.id}:${flowJob.id}`)}`;
   const libraryJob = () => db.prepare(
-    "SELECT id FROM playlist_download_jobs WHERE playlist_type = ? AND track_name = ? LIMIT 1",
+    "SELECT id FROM download_jobs WHERE owner_id = ? AND track_name = ? LIMIT 1",
   ).get("library", flowJob.trackName);
   assert.equal(libraryJob(), undefined);
   const user = userOps.getUserByUsername("alice");
@@ -735,7 +735,7 @@ test("favorites can keep Flow tracks and respect the auto-keep setting", async (
   assert.equal(responseJson(await request("star", { id: entry.id })).status, "ok");
   assert.equal(
     Boolean(db.prepare(
-      "SELECT 1 FROM playlist_download_jobs WHERE playlist_type = ? AND track_name = ? LIMIT 1",
+      "SELECT 1 FROM download_jobs WHERE owner_id = ? AND track_name = ? LIMIT 1",
     ).get("library", "Favorite Song")),
     false,
   );
@@ -750,7 +750,7 @@ test("favorites can keep Flow tracks and respect the auto-keep setting", async (
   assert.equal(responseJson(await request("unstar", { id: entry.id })).status, "ok");
   assert.equal(responseJson(await request("star", { id: entry.id })).status, "ok");
   const autoKeepJob = db.prepare(
-    "SELECT id FROM playlist_download_jobs WHERE playlist_type = ? AND track_name = ? LIMIT 1",
+    "SELECT id FROM download_jobs WHERE owner_id = ? AND track_name = ? LIMIT 1",
   ).get("library", "Favorite Song");
   assert.ok(autoKeepJob);
   downloadTracker.removeJob(autoKeepJob.id);
@@ -774,7 +774,7 @@ test("favoriting a synced playlist track keeps it when the source removes it", a
     assert.equal(star(userOps.getUserByUsername("alice"), songId), true);
 
     const libraryJob = db.prepare(
-      "SELECT id, status, final_path AS finalPath FROM playlist_download_jobs WHERE playlist_type = ? AND track_name = ? LIMIT 1",
+      "SELECT id, status, final_path AS finalPath FROM download_jobs WHERE owner_id = ? AND track_name = ? LIMIT 1",
     ).get("library", track.trackName);
     assert.ok(libraryJob);
     assert.equal(libraryJob.status, "done");
@@ -794,7 +794,7 @@ test("favoriting a synced playlist track keeps it when the source removes it", a
     });
 
     const updatedLibraryJob = db.prepare(
-      "SELECT final_path AS finalPath FROM playlist_download_jobs WHERE id = ?",
+      "SELECT final_path AS finalPath FROM download_jobs WHERE id = ?",
     ).get(libraryJobId);
     assert.equal(updatedLibraryJob.finalPath, sourcePath);
     await stat(sourcePath);

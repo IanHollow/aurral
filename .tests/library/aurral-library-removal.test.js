@@ -163,7 +163,7 @@ function registerSlskdSearch(jobId) {
   const workId = `search-removal-${jobId}`;
   cancellation.registerDownloadProviderWork({
     jobId,
-    playlistId: "library",
+    ownerId: "library",
     provider: "slskd-search",
     workId,
   });

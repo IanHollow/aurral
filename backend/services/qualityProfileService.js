@@ -198,7 +198,7 @@ export async function finalizeQualityUpgradeSuccess(upgradeJob, finalPath, quali
   const oldPath = original.finalPath;
   const originalDetails = {
     trackName: original.trackName,
-    playlistType: original.playlistType,
+    ownerId: original.ownerId,
     qualityTier: original.qualityTier,
   };
   const changed = downloadTracker.replaceFinalPath(oldPath, finalPath, quality);
@@ -219,7 +219,7 @@ export async function finalizeQualityUpgradeSuccess(upgradeJob, finalPath, quali
     artistName: original.artistName,
     albumName: original.albumName,
     albumMbid: original.albumMbid,
-    playlistId: originalDetails.playlistType,
+    playlistId: originalDetails.ownerId,
     title: upgradeJob.manualReplacementSearch
       ? `Re-searched ${originalDetails.trackName}`
       : `Upgraded ${originalDetails.trackName}`,
@@ -248,7 +248,7 @@ export async function finalizeQualityUpgradeFailure(upgradeJob, message) {
     artistName: original.artistName,
     albumName: original.albumName,
     albumMbid: original.albumMbid,
-    playlistId: original.playlistType,
+    playlistId: original.ownerId,
     title: upgradeJob.manualReplacementSearch
       ? `No replacement found for ${original.trackName}`
       : `No upgrade found for ${original.trackName}`,

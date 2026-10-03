@@ -27,7 +27,7 @@ try {
 db.exec(`
   DELETE FROM settings WHERE key LIKE 'activeDownloadAttempt:%'
     AND NOT EXISTS (
-      SELECT 1 FROM playlist_download_jobs
+      SELECT 1 FROM download_jobs
       WHERE id = substr(settings.key, length('activeDownloadAttempt:') + 1) AND status != 'done'
     );
 `);

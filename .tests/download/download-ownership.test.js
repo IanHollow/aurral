@@ -21,12 +21,12 @@ test("album leadership moves to a held peer without cancelling shared provider w
   const playlist = flowPlaylistConfig.createStaticPlaylist({ name: "Album" });
   const leader = downloadTracker.addJob({ artistName: "Artist", trackName: "First", albumMbid: "album" }, playlist.id);
   const peer = downloadTracker.addJob({ artistName: "Artist", trackName: "Second", albumMbid: "album" }, playlist.id);
-  db.prepare("UPDATE playlist_download_jobs SET request_group_id = ? WHERE id IN (?, ?)").run("album-request", leader, peer);
+  db.prepare("UPDATE download_jobs SET request_group_id = ? WHERE id IN (?, ?)").run("album-request", leader, peer);
   downloadTracker.reconcileCommittedJobs();
   downloadTracker.setDownloading(peer);
   downloadTracker.markSlskdDispatched(leader);
   downloadTracker.updateDownloadMetadata(leader, { downloadSource: "deemix", downloadClientId: "existing-queue" });
-  const payload = { jobId: leader, playlistId: playlist.id, playlistGeneration: 0, phase: "poll", albumGrab: true, albumGroupJobIds: [leader, peer], queueUuid: "existing-queue" };
+  const payload = { jobId: leader, ownerId: playlist.id, ownerGeneration: 0, phase: "poll", albumGrab: true, albumGroupJobIds: [leader, peer], queueUuid: "existing-queue" };
   honker.getPipelineQueue().enqueue(payload);
   const redirect = db.transaction(() => ownership.replaceAlbumDownloadLeaderInTransaction(leader, peer))();
   downloadTracker.reconcileCommittedJobs([redirect]);
@@ -45,7 +45,7 @@ test("completed and removed jobs release their active attempt records", () => {
   const attempt = cancellation.beginDownloadAttempt(jobId);
   downloadTracker.setDone(jobId, "/disposable/finished.flac");
   assert.equal(cancellation.getActiveDownloadAttemptId(jobId), null);
-  assert.equal(cancellation.isPipelinePayloadActive({ jobId, playlistId: "attempt-owner", playlistGeneration: 0, downloadAttemptId: attempt }), false);
+  assert.equal(cancellation.isPipelinePayloadActive({ jobId, ownerId: "attempt-owner", ownerGeneration: 0, downloadAttemptId: attempt }), false);
   const pendingId = downloadTracker.addJob({ artistName: "Artist", trackName: "Removed" }, "attempt-owner");
   cancellation.beginDownloadAttempt(pendingId);
   downloadTracker.removeJob(pendingId);

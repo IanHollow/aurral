@@ -154,8 +154,8 @@ const PAYLOAD_LABEL_KEY = {
   "slskd-pipeline": "phase",
   "playlist-operation": (p) =>
     formatPayloadLabel(p?.label || p?.kind) || null,
-  "playlist-retry": "playlistType",
-  "playlist-reserve-build": "playlistType",
+  "playlist-retry": "ownerId",
+  "playlist-reserve-build": "ownerId",
   "playlist-mbid-enrichment": "playlistId",
   "library-scan": (p) => (p?.force ? "Manual" : null),
   "discovery-user-refresh": (p) =>
@@ -168,12 +168,12 @@ const PAYLOAD_DETAIL_KEY = {
       ? `${desc} Current phase: ${formatPayloadLabel(p.phase)}.`
       : desc,
   "playlist-retry": (p, desc) =>
-    p?.playlistType
-      ? `Retries incomplete tracks for ${formatPayloadLabel(p.playlistType)}.`
+    p?.ownerId
+      ? `Retries incomplete tracks for ${formatPayloadLabel(p.ownerId)}.`
       : desc,
   "playlist-reserve-build": (p, desc) =>
-    p?.playlistType
-      ? `Builds reserve tracks for ${formatPayloadLabel(p.playlistType)}.`
+    p?.ownerId
+      ? `Builds reserve tracks for ${formatPayloadLabel(p.ownerId)}.`
       : desc,
   "playlist-mbid-enrichment": (p, _desc) =>
     p?.playlistId
@@ -462,7 +462,7 @@ function summarizePayload(queue, payloadValue) {
     "kind",
     "reason",
     "phase",
-    "playlistType",
+    "ownerId",
     "playlistId",
     "flowId",
     "jobId",

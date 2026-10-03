@@ -130,7 +130,7 @@ export function createSchema(db) {
         last_played_at = MAX(play_album_stats.last_played_at, excluded.last_played_at);
     END;
 
-    CREATE TABLE IF NOT EXISTS playlist_download_jobs (
+    CREATE TABLE IF NOT EXISTS download_jobs (
       id TEXT PRIMARY KEY,
       artist_name TEXT NOT NULL,
       track_name TEXT NOT NULL,
@@ -145,9 +145,8 @@ export function createSchema(db) {
       album_track_count INTEGER,
       album_track_titles TEXT,
       artist_aliases TEXT,
-      playlist_id TEXT NOT NULL,
-      playlist_generation INTEGER NOT NULL DEFAULT 0,
-      playlist_type TEXT,
+      owner_id TEXT NOT NULL,
+      owner_generation INTEGER NOT NULL DEFAULT 0,
       managed_by TEXT,
       request_group_id TEXT,
       status TEXT NOT NULL,
@@ -183,48 +182,48 @@ export function createSchema(db) {
       queued_for_playlist INTEGER NOT NULL DEFAULT 0
     );
 
-    CREATE TABLE IF NOT EXISTS playlist_download_jobs_revision (
+    CREATE TABLE IF NOT EXISTS download_jobs_revision (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       revision INTEGER NOT NULL DEFAULT 0
     );
-    INSERT OR IGNORE INTO playlist_download_jobs_revision (id, revision) VALUES (1, 0);
+    INSERT OR IGNORE INTO download_jobs_revision (id, revision) VALUES (1, 0);
 
-    CREATE TRIGGER IF NOT EXISTS playlist_download_jobs_revision_insert
-      AFTER INSERT ON playlist_download_jobs BEGIN
-        UPDATE playlist_download_jobs_revision SET revision = revision + 1 WHERE id = 1;
+    CREATE TRIGGER IF NOT EXISTS download_jobs_revision_insert
+      AFTER INSERT ON download_jobs BEGIN
+        UPDATE download_jobs_revision SET revision = revision + 1 WHERE id = 1;
       END;
-    CREATE TRIGGER IF NOT EXISTS playlist_download_jobs_revision_update
-      AFTER UPDATE ON playlist_download_jobs BEGIN
-        UPDATE playlist_download_jobs_revision SET revision = revision + 1 WHERE id = 1;
+    CREATE TRIGGER IF NOT EXISTS download_jobs_revision_update
+      AFTER UPDATE ON download_jobs BEGIN
+        UPDATE download_jobs_revision SET revision = revision + 1 WHERE id = 1;
       END;
-    CREATE TRIGGER IF NOT EXISTS playlist_download_jobs_revision_delete
-      AFTER DELETE ON playlist_download_jobs BEGIN
-        UPDATE playlist_download_jobs_revision SET revision = revision + 1 WHERE id = 1;
+    CREATE TRIGGER IF NOT EXISTS download_jobs_revision_delete
+      AFTER DELETE ON download_jobs BEGIN
+        UPDATE download_jobs_revision SET revision = revision + 1 WHERE id = 1;
       END;
-    CREATE TRIGGER IF NOT EXISTS playlist_download_attempt_delete
-      AFTER DELETE ON playlist_download_jobs BEGIN
+    CREATE TRIGGER IF NOT EXISTS download_attempt_delete
+      AFTER DELETE ON download_jobs BEGIN
         DELETE FROM settings WHERE key = 'activeDownloadAttempt:' || OLD.id;
       END;
-    CREATE TRIGGER IF NOT EXISTS playlist_download_attempt_complete
-      AFTER UPDATE OF status ON playlist_download_jobs WHEN NEW.status = 'done' BEGIN
+    CREATE TRIGGER IF NOT EXISTS download_attempt_complete
+      AFTER UPDATE OF status ON download_jobs WHEN NEW.status = 'done' BEGIN
         DELETE FROM settings WHERE key = 'activeDownloadAttempt:' || NEW.id;
       END;
 
-    CREATE TABLE IF NOT EXISTS weekly_flow_download_cancellations (
-      playlist_id TEXT PRIMARY KEY,
+    CREATE TABLE IF NOT EXISTS download_owner_cancellations (
+      owner_id TEXT PRIMARY KEY,
       generation INTEGER NOT NULL DEFAULT 0,
       state TEXT NOT NULL DEFAULT 'active',
       changed_at INTEGER NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS weekly_flow_download_job_cancellations (
+    CREATE TABLE IF NOT EXISTS download_job_cancellations (
       job_id TEXT PRIMARY KEY,
       cancelled_at INTEGER NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS weekly_flow_download_provider_work (
+    CREATE TABLE IF NOT EXISTS download_provider_work (
       job_id TEXT NOT NULL,
-      playlist_id TEXT NOT NULL DEFAULT '',
+      owner_id TEXT NOT NULL DEFAULT '',
       provider TEXT NOT NULL,
       work_id TEXT NOT NULL,
       username TEXT NOT NULL DEFAULT '',
@@ -462,15 +461,15 @@ export function createSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_play_events_user_played_at ON play_events(user_id, played_at DESC);
     CREATE INDEX IF NOT EXISTS idx_play_album_stats_user_ranking
       ON play_album_stats(user_id, play_count DESC, last_played_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_playlist_download_jobs_status ON playlist_download_jobs(status);
-    CREATE INDEX IF NOT EXISTS idx_playlist_download_jobs_playlist_id ON playlist_download_jobs(playlist_id);
-    CREATE INDEX IF NOT EXISTS idx_playlist_download_jobs_request_group ON playlist_download_jobs(request_group_id);
-    CREATE INDEX IF NOT EXISTS idx_weekly_flow_download_job_cancellations_time
-      ON weekly_flow_download_job_cancellations(cancelled_at);
-    CREATE INDEX IF NOT EXISTS idx_weekly_flow_download_provider_work_job
-      ON weekly_flow_download_provider_work(job_id, provider);
-    CREATE INDEX IF NOT EXISTS idx_weekly_flow_download_provider_work_playlist
-      ON weekly_flow_download_provider_work(playlist_id, provider);
+    CREATE INDEX IF NOT EXISTS idx_download_jobs_status ON download_jobs(status);
+    CREATE INDEX IF NOT EXISTS idx_download_jobs_owner_id ON download_jobs(owner_id);
+    CREATE INDEX IF NOT EXISTS idx_download_jobs_request_group ON download_jobs(request_group_id);
+    CREATE INDEX IF NOT EXISTS idx_download_job_cancellations_time
+      ON download_job_cancellations(cancelled_at);
+    CREATE INDEX IF NOT EXISTS idx_download_provider_work_job
+      ON download_provider_work(job_id, provider);
+    CREATE INDEX IF NOT EXISTS idx_download_provider_work_owner
+      ON download_provider_work(owner_id, provider);
     CREATE INDEX IF NOT EXISTS idx_images_cache_cache_age ON images_cache(cache_age);
     CREATE INDEX IF NOT EXISTS idx_musicbrainz_artist_mbid_cache_updated_at ON musicbrainz_artist_mbid_cache(updated_at);
     CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);

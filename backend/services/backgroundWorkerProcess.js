@@ -30,7 +30,7 @@ const DOWNLOAD_OWNER_COMMANDS = new Set([
   "checkPlaylistComplete", "blockPlaylist", "unblockPlaylist",
   "waitForPlaylistIdle", "waitForIdle", "clearIncompleteRetry",
   "clearPlaylistRunState", "pruneOrphanedJobState", "scheduleReuseLinkRepair",
-  "runQualityUpgradeChecks", "queueQualityUpgradeForJob", "clearPendingByPlaylist",
+  "runQualityUpgradeChecks", "queueQualityUpgradeForJob", "clearPendingByOwner",
   "wakeOrStart", "syncStaticPlaylistImport",
   "enqueueManualMissingSelection", "enqueueManualReplacementSelection",
   "approveBlockedJob", "denyBlockedJob",
@@ -58,9 +58,9 @@ async function handleDownloadOwnerCommand(message) {
     } else if (method === "approveBlockedJob" || method === "denyBlockedJob") {
       const review = await import("./downloadJobs/blockedJobReview.js");
       result = await review[method](args[0]);
-    } else if (method === "clearPendingByPlaylist") {
+    } else if (method === "clearPendingByOwner") {
       const { downloadTracker } = await import("./downloadJobs/downloadTracker.js");
-      result = downloadTracker.clearPendingByPlaylistType(args[0]);
+      result = downloadTracker.clearPendingByOwner(args[0]);
     } else if (method === "wakeOrStart") {
       if (downloadWorker.running) downloadWorker.wake(args[0]);
       else await downloadWorker.start();

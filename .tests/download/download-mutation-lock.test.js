@@ -16,7 +16,7 @@ test("playlist mutation waits for the active provider stage before changing owne
   const jobId = downloadTracker.addJob({ artistName: "Artist", trackName: "Track" }, playlist.id);
   const started = deferred();
   const release = deferred();
-  const processing = processOrchestratorJob({ jobId, playlistId: playlist.id, playlistGeneration: 0 }, {
+  const processing = processOrchestratorJob({ jobId, ownerId: playlist.id, ownerGeneration: 0 }, {
     async processPipelinePayload() { started.resolve(); await release.promise; return null; },
     async continuePipeline() {},
   });
@@ -41,7 +41,7 @@ test("a provider stage can import while a playlist mutation waits for it", { tim
   const started = deferred();
   const release = deferred();
   let imported = null;
-  const processing = processOrchestratorJob({ jobId, playlistId: playlist.id, playlistGeneration: 0 }, {
+  const processing = processOrchestratorJob({ jobId, ownerId: playlist.id, ownerGeneration: 0 }, {
     async processPipelinePayload(payload) {
       started.resolve();
       await release.promise;
@@ -59,7 +59,7 @@ test("a provider stage can import while a playlist mutation waits for it", { tim
 });
 
 test("pipeline commit can reuse a live playlist lock", { timeout: 2000 }, async () => {
-  const result = await guards.withPlaylistMutationLock("nested", () => cancellation.withPipelineCommitLock({ playlistId: "nested", playlistGeneration: 0 }, () => "committed"));
+  const result = await guards.withPlaylistMutationLock("nested", () => cancellation.withPipelineCommitLock({ ownerId: "nested", ownerGeneration: 0 }, () => "committed"));
   assert.deepEqual(result, { cancelled: false, result: "committed" });
 });
 
@@ -88,7 +88,7 @@ test("a provider stage that needs another playlist lock fails instead of running
   const playlist = flowPlaylistConfig.createStaticPlaylist({ name: "Stage owner" });
   const jobId = downloadTracker.addJob({ artistName: "Artist", trackName: "Stage track" }, playlist.id);
   let runs = 0;
-  await assert.rejects(processOrchestratorJob({ jobId, playlistId: playlist.id, playlistGeneration: 0 }, {
+  await assert.rejects(processOrchestratorJob({ jobId, ownerId: playlist.id, ownerGeneration: 0 }, {
     async processPipelinePayload() {
       runs++;
       if (runs > 1) throw new Error("provider stage ran again");

@@ -351,14 +351,14 @@ function toPlaylistSong(
 function playlistJobs(playlist) {
   if (!playlist) return [];
   return flowPlaylistConfig.getFlow(playlist.id)
-    ? orderJobsByPlaylistTracks(downloadTracker.getByPlaylistType(playlist.id), playlist.tracks)
+    ? orderJobsByPlaylistTracks(downloadTracker.getByOwner(playlist.id), playlist.tracks)
     : getStaticPlaylistJobs(playlist);
 }
 
 function playlistOwnsJob(playlist, job) {
   if (!playlist || !job) return false;
   return flowPlaylistConfig.getFlow(playlist.id)
-    ? job.playlistType === playlist.id
+    ? job.ownerId === playlist.id && !job.upgradeForJobId
     : staticPlaylistReferencesJob(playlist, job.id);
 }
 
@@ -681,7 +681,7 @@ const favoriteAutoKeepEnabled = () => dbOps.getSettings()?.subsonic?.favoriteAut
 const findReusableLibrarySource = (track) =>
   downloadTracker.getAll().find(
     (job) =>
-      job?.playlistType !== "library" &&
+      job?.ownerId !== "library" &&
       job?.status === "done" &&
       typeof job.finalPath === "string" &&
       existsSync(job.finalPath) &&

@@ -41,7 +41,7 @@ async function libraryFile(name, contents) {
 
 test("single-track removal keeps a queued job and its provider work while another playlist references it", async (t) => {
   const { source, survivor, jobId } = fixture(t);
-  const payload = { jobId, playlistId: "library", playlistGeneration: 0, phase: "poll", source: "deemix", queueUuid: "needed-provider-work" };
+  const payload = { jobId, ownerId: "library", ownerGeneration: 0, phase: "poll", source: "deemix", queueUuid: "needed-provider-work" };
   const queuedId = honker.getPipelineQueue().enqueue(payload);
   await operations.processPlaylistOperation({ kind: "static-playlist-delete-track", playlistId: source.id, jobId });
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(source.id).tracks.length, 0);

@@ -13,7 +13,7 @@ const [state, { db }, { dbOps }, { flowPlaylistConfig }, { registerStaticPlaylis
   "backend/services/downloadJobs/downloadTracker.js",
   "backend/services/downloadJobs/downloadCancellation.js",
 );
-const { activatePlaylistDownloadGeneration, isDownloadJobCancelled, isPipelinePayloadActive } = cancellationModule;
+const { activateOwnerDownloadGeneration, isDownloadJobCancelled, isPipelinePayloadActive } = cancellationModule;
 
 const handlers = new Map();
 registerStaticPlaylists({
@@ -127,7 +127,7 @@ test("a failed playlist-delete enqueue restores the active download generation",
     ownerUserId: user.id,
     tracks: [],
   });
-  const generation = activatePlaylistDownloadGeneration(playlist.id);
+  const generation = activateOwnerDownloadGeneration(playlist.id);
   const jobId = downloadTracker.addJob({ artistName: "Artist", trackName: "Song" }, playlist.id);
   t.mock.method(playlistOperationQueue, "enqueuePayload", async () => {
     throw new Error("queue unavailable");
@@ -146,7 +146,7 @@ test("a failed playlist-delete enqueue restores the active download generation",
 
   assert.equal(response.statusCode, 500);
   assert.equal(isDownloadJobCancelled(jobId), false);
-  assert.equal(isPipelinePayloadActive({ jobId, playlistId: playlist.id, playlistGeneration: generation }), true);
+  assert.equal(isPipelinePayloadActive({ jobId, ownerId: playlist.id, ownerGeneration: generation }), true);
 });
 
 test("existing playlists without the preference start disabled after loading", async () => {

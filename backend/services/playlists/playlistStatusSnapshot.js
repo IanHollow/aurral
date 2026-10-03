@@ -175,7 +175,7 @@ export function getPlaylistStatusSnapshot({
   const flowIds = flows.map((flow) => flow.id);
   const staticPlaylistIds = rawStaticPlaylists.map((playlist) => playlist.id);
   const scopedStats = {
-    ...downloadTracker.getStatsByPlaylistType(flowIds),
+    ...downloadTracker.getStatsByOwner(flowIds),
     ...Object.fromEntries(rawStaticPlaylists.map((playlist) => [
       playlist.id,
       countJobStatuses(getStaticPlaylistJobs(playlist)),

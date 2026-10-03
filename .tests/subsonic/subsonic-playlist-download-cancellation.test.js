@@ -97,7 +97,7 @@ async function holdCommitLock(jobId) {
   const held = new Promise((resolve) => { release = resolve; });
   const job = downloadTracker.getJob(jobId);
   const lock = withPipelineCommitLock(
-    { jobId, playlistId: "library", playlistGeneration: job.playlistGeneration },
+    { jobId, ownerId: "library", ownerGeneration: job.ownerGeneration },
     async () => {
       signalEntered();
       await held;
@@ -234,7 +234,7 @@ test("Subsonic deletion retains its download and provider work when cancellation
   downloadTracker.setDownloading(jobId);
   registerDownloadProviderWork({
     jobId,
-    playlistId: "library",
+    ownerId: "library",
     provider: "slskd-search",
     workId: "subsonic-retry-search",
   });
@@ -265,7 +265,7 @@ test("a failed Subsonic edit keeps the old playlist and leaves its downloads rec
   downloadTracker.setDownloading(downloadingJobId);
   registerDownloadProviderWork({
     jobId: downloadingJobId,
-    playlistId: "library",
+    ownerId: "library",
     provider: "slskd-search",
     workId: "subsonic-edit-retry-search",
   });

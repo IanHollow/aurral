@@ -50,7 +50,7 @@ test("production snapshots refresh persisted membership and access changes witho
     assert.equal(read().staticPlaylists[0].trackIdentities.length, 1);
     assert.notEqual(read().staticPlaylists[0].trackEntries[0].identity, "caller mutation");
 
-    writeFromAnotherProcess("UPDATE playlist_download_jobs SET track_name = ?, status = ? WHERE id = ?", ["Changed track", "failed", jobId]);
+    writeFromAnotherProcess("UPDATE download_jobs SET track_name = ?, status = ? WHERE id = ?", ["Changed track", "failed", jobId]);
     const updated = read();
     assert.notEqual(updated.staticPlaylists[0].trackIdentities[0], first.trackIdentities[0]);
     assert.equal(updated.staticPlaylistStats[playlist.id].failed, 1);
@@ -64,7 +64,7 @@ test("production snapshots refresh persisted membership and access changes witho
     assert.ok(renamed.trackIdentities.some((identity) => identity.includes("manual track")));
     assert.equal(renamed.trackEntries.length, 1);
 
-    writeFromAnotherProcess("DELETE FROM playlist_download_jobs WHERE id = ?", [jobId]);
+    writeFromAnotherProcess("DELETE FROM download_jobs WHERE id = ?", [jobId]);
     assert.equal(read().staticPlaylists[0].trackIdentities.some((identity) => identity.includes("changed track")), false);
     assert.deepEqual(read().staticPlaylists[0].trackEntries, []);
 

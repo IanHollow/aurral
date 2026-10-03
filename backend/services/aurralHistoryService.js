@@ -45,7 +45,7 @@ const buildPlaylistHref = (playlistId) => {
 };
 
 const buildTrackJobHref = (job) => {
-  const playlistId = job?.playlistId || job?.playlistType;
+  const playlistId = job?.ownerId;
   if (playlistId === "library" && job?.albumMbid) {
     const album = getLibraryForAlbumReferences({
       source: "all",
@@ -590,8 +590,7 @@ const buildHistoryJobFromEntry = (entry) => ({
   id: entry.metadata?.jobId || entry.id,
   trackName: entry.metadata?.trackName || null,
   artistName: entry.metadata?.artistName || null,
-  playlistId: entry.metadata?.playlistId || null,
-  playlistType: entry.metadata?.playlistId || null,
+  ownerId: entry.metadata?.playlistId || null,
   downloadSource: entry.metadata?.downloadSource || null,
 });
 
@@ -942,7 +941,7 @@ export const recordTrackJobActivity = ({
     subtitle: subtitle || `${artist} · ${playlistName}`,
     status,
     statusLabel,
-    href: href || buildTrackJobHref({ playlistType: playlistId, albumMbid }),
+    href: href || buildTrackJobHref({ ownerId: playlistId, albumMbid }),
     metadata: {
       jobId: id,
       trackName: track,
@@ -961,7 +960,7 @@ const trackJobFields = (job) => ({
   trackName: job?.trackName,
   artistName: job?.artistName,
   albumName: job?.albumName,
-  playlistId: job?.playlistId || job?.playlistType,
+  playlistId: job?.ownerId,
   downloadSource: job?.downloadSource,
   downloadClient: job?.downloadClient,
   href: buildTrackJobHref(job),
@@ -1006,7 +1005,7 @@ export const recordTrackJobCompleted = (job, statusLabel = "Downloaded") =>
     status: "completed",
     statusLabel,
     title: `${statusLabel === "Reused" ? "Reused" : "Downloaded"} ${job?.trackName || "track"}`,
-    subtitle: `${job?.artistName || "Artist"} · ${resolvePlaylistName(job?.playlistId || job?.playlistType)}`,
+    subtitle: `${job?.artistName || "Artist"} · ${resolvePlaylistName(job?.ownerId)}`,
   });
 
 export const recordTrackJobFailed = (job, message = "Download failed") =>
@@ -1088,7 +1087,7 @@ export const toHistoryRequestItem = (entry, options = {}) => {
 const FAILED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 const buildActiveTrackHistory = (job) => {
-  const playlistId = job?.playlistId || job?.playlistType;
+  const playlistId = job?.ownerId;
   const status =
     job?.status === "blocked" ? "blocked" : job?.status === "downloading" ? "processing" : "pending";
   const statusLabel =

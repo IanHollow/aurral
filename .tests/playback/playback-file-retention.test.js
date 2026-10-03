@@ -125,17 +125,17 @@ test("flow reset retains external files at the same path and clears outgoing job
     calls += 1;
     return [{ destination: "Jellyfin", ok: true, paths: [saved] }];
   });
-  await playlistManager.weeklyReset(["flow"]);
+  await playlistManager.clearFlowFiles(["flow"]);
   await fs.access(saved);
   await assert.rejects(fs.access(unused), { code: "ENOENT" });
-  assert.equal(downloadTracker.getByPlaylistType("flow").length, 0);
+  assert.equal(downloadTracker.getByOwner("flow").length, 0);
   assert.equal(calls, 1);
 });
 
 test("explicit manual reset deletes externally referenced files without contacting services", async (t) => {
   const saved = await makeFile("_flows/flow/saved.flac");
   t.mock.method(playlistManager.destinationRegistry, "run", async () => { assert.fail("manual deletion queried playback"); });
-  await playlistManager.weeklyReset(["flow"], { protectPlayback: false });
+  await playlistManager.clearFlowFiles(["flow"], { protectPlayback: false });
   await assert.rejects(fs.access(saved), { code: "ENOENT" });
 });
 
@@ -229,10 +229,10 @@ test("automatic cleanup keeps a shared file in place; explicit deletion preserve
   const jobId = downloadTracker.addJob({ artistName: "Artist", trackName: "Saved" }, other.id);
   downloadTracker.setDone(jobId, file);
   t.mock.method(playlistManager.destinationRegistry, "run", async () => [{ destination: "Jellyfin", ok: true, paths: [file] }]);
-  await playlistManager.weeklyReset([flow.id]);
+  await playlistManager.clearFlowFiles([flow.id]);
   assert.equal(downloadTracker.getAll().find((job) => job.id === jobId).finalPath, file);
   await fs.access(file);
-  await playlistManager.weeklyReset([flow.id], { protectPlayback: false });
+  await playlistManager.clearFlowFiles([flow.id], { protectPlayback: false });
   const moved = downloadTracker.getAll().find((job) => job.id === jobId).finalPath;
   assert.notEqual(moved, file);
   await fs.access(moved);
@@ -307,7 +307,7 @@ for (const changeBeforeReset of [false, true]) {
     t.mock.method(playlistManager.destinationRegistry, "run", async () =>
       unavailable ? [{ ok: false }] : [{ ok: true, paths: [] }]);
     if (changeBeforeReset) dbOps.updateSettings({ downloadFolderPath: newRoot });
-    await playlistManager.weeklyReset(["old-root"]);
+    await playlistManager.clearFlowFiles(["old-root"]);
     if (!changeBeforeReset) dbOps.updateSettings({ downloadFolderPath: newRoot });
     await retryPlaybackRetainedFiles();
     await fs.access(file);
@@ -348,9 +348,9 @@ test("explicit reset removes symbolic links without touching their targets; auto
     await fs.symlink(target, link, process.platform === "win32" ? "junction" : "dir");
   }
   t.mock.method(playlistManager.destinationRegistry, "run", async () => { assert.fail("symbolic link cleanup queried playback"); });
-  await playlistManager.weeklyReset(["linked"]);
+  await playlistManager.clearFlowFiles(["linked"]);
   for (const relative of links) assert.equal((await fs.lstat(path.join(root, relative))).isSymbolicLink(), true);
-  await playlistManager.weeklyReset(["linked"], { protectPlayback: false });
+  await playlistManager.clearFlowFiles(["linked"], { protectPlayback: false });
   for (const relative of links) await assert.rejects(fs.lstat(path.dirname(path.join(root, relative))), { code: "ENOENT" });
   assert.equal(await fs.readFile(targetFile, "utf8"), "external audio");
 });

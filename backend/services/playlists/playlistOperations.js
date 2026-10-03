@@ -40,9 +40,9 @@ import { withHonkerLock } from "../honkerDb.js";
 import { getUnavailableFlowSourceError } from "../flows/flowValidation.js";
 import { schedulePlaylistMbidEnrichment } from "../playlistMbidEnrichmentService.js";
 import { filterBlockedArtistsForUser } from "../discovery/feedback.js";
-import { activatePlaylistDownloadGeneration } from "../downloadJobs/downloadCancellation.js";
+import { activateOwnerDownloadGeneration } from "../downloadJobs/downloadCancellation.js";
 import {
-  cancelPlaylistDownloadWork,
+  cancelOwnerDownloadWork,
 } from "../downloadJobs/downloadCancellationService.js";
 
 import {
@@ -177,12 +177,12 @@ async function runFlowSeed({
       throw new Error("Flow settings changed while planning; retrying");
     }
 
-    activatePlaylistDownloadGeneration(safeFlowId);
+    activateOwnerDownloadGeneration(safeFlowId);
     recordFlowGenerationStarted({ flowId: safeFlowId });
     playlistManager.updateConfig(false);
-    await playlistManager.weeklyReset([safeFlowId]);
+    await playlistManager.clearFlowFiles([safeFlowId]);
     downloadWorker.clearPlaylistRunState(safeFlowId);
-    downloadTracker.clearByPlaylistId(safeFlowId);
+    downloadTracker.clearAllForOwner(safeFlowId);
 
     if (!isLatestPlaylistOperationToken(tokenScope, token)) {
       return { cancelled: true };
@@ -217,8 +217,8 @@ async function runFlowSeed({
       if (JSON.stringify(current) !== flowSnapshot) {
         throw new Error("Flow settings changed while planning; retrying");
       }
-      const existingFlowJobs = downloadTracker.getByPlaylistId(safeFlowId);
-      await cancelPlaylistDownloadWork(safeFlowId, existingFlowJobs, { lock: false });
+      const existingFlowJobs = downloadTracker.getAllForOwner(safeFlowId);
+      await cancelOwnerDownloadWork(safeFlowId, existingFlowJobs, { lock: false });
       if (!isLatestPlaylistOperationToken(tokenScope, token)) {
         return { cancelled: true };
       }
@@ -253,15 +253,15 @@ async function runFlowCleanup({ flowId, tokenScope = null, token = null } = {}) 
   if (!isLatestPlaylistOperationToken(tokenScope, token)) {
     return { cancelled: true };
   }
-  await cancelPlaylistDownloadWork(safeFlowId, downloadTracker.getByPlaylistId(safeFlowId));
+  await cancelOwnerDownloadWork(safeFlowId, downloadTracker.getAllForOwner(safeFlowId));
   await withPlaylistMutation(safeFlowId, async () => {
     if (!isLatestPlaylistOperationToken(tokenScope, token)) {
       return;
     }
     playlistManager.updateConfig(false);
-    await playlistManager.weeklyReset([safeFlowId]);
+    await playlistManager.clearFlowFiles([safeFlowId]);
     downloadWorker.clearPlaylistRunState(safeFlowId);
-    downloadTracker.clearByPlaylistId(safeFlowId);
+    downloadTracker.clearAllForOwner(safeFlowId);
   });
   rescanLibraryForFlows([safeFlowId]);
   await restartWorkerIfPending();
@@ -276,7 +276,7 @@ async function deleteFlow({ flowId, tokenScope = null, token = null } = {}) {
   if (!isLatestPlaylistOperationToken(tokenScope, token)) {
     return { cancelled: true };
   }
-  await cancelPlaylistDownloadWork(safeFlowId, downloadTracker.getByPlaylistId(safeFlowId));
+  await cancelOwnerDownloadWork(safeFlowId, downloadTracker.getAllForOwner(safeFlowId));
   let didDelete = false;
   await withPlaylistMutation(safeFlowId, async () => {
     if (!isLatestPlaylistOperationToken(tokenScope, token)) {
@@ -286,8 +286,8 @@ async function deleteFlow({ flowId, tokenScope = null, token = null } = {}) {
     downloadWorker.clearPlaylistRunState(safeFlowId);
     playlistManager.updateConfig(false);
     await playlistManager.deletePlaybackPlaylist(flow);
-    await playlistManager.weeklyReset([safeFlowId], { protectPlayback: false });
-    downloadTracker.clearByPlaylistId(safeFlowId);
+    await playlistManager.clearFlowFiles([safeFlowId], { protectPlayback: false });
+    downloadTracker.clearAllForOwner(safeFlowId);
     await playlistManager.cleanupEntityPlexPlaylists(safeFlowId);
     didDelete = flowPlaylistConfig.deleteFlow(safeFlowId);
     await playlistManager.ensureSmartPlaylists();
@@ -297,22 +297,20 @@ async function deleteFlow({ flowId, tokenScope = null, token = null } = {}) {
   return didDelete;
 }
 
-async function resetPlaylists({ playlistTypes = [] } = {}) {
-  const types = (Array.isArray(playlistTypes) ? playlistTypes : [playlistTypes])
+async function resetFlows({ flowIds = [] } = {}) {
+  const ids = (Array.isArray(flowIds) ? flowIds : [flowIds])
     .map((entry) => String(entry || "").trim())
     .filter(Boolean);
   await Promise.all(
-    types.map((playlistType) =>
-      cancelPlaylistDownloadWork(playlistType, downloadTracker.getByPlaylistId(playlistType)),
-    ),
+    ids.map((flowId) => cancelOwnerDownloadWork(flowId, downloadTracker.getAllForOwner(flowId))),
   );
-  await withPlaylistMutation(types, async () => {
+  await withPlaylistMutation(ids, async () => {
     playlistManager.updateConfig(false);
-    await playlistManager.weeklyReset(types, { protectPlayback: false });
+    await playlistManager.clearFlowFiles(ids, { protectPlayback: false });
   });
-  rescanLibraryForFlows(types);
+  rescanLibraryForFlows(ids);
   await restartWorkerIfPending();
-  return { success: true, playlistTypes: types };
+  return { success: true, flowIds: ids };
 }
 
 async function adoptFlowSeed({ flowId, tracks = [] } = {}) {
@@ -321,14 +319,14 @@ async function adoptFlowSeed({ flowId, tracks = [] } = {}) {
   if (!flow) return { missing: true };
   if (!isOwnerActive(flow.ownerUserId)) return { skipped: true, inactiveOwner: true };
   const normalizedTracks = normalizeTrackList(tracks);
-  await cancelPlaylistDownloadWork(safeFlowId, downloadTracker.getByPlaylistId(safeFlowId));
+  await cancelOwnerDownloadWork(safeFlowId, downloadTracker.getAllForOwner(safeFlowId));
   const result = await withPlaylistMutation(safeFlowId, async () => {
     const latestFlow = flowPlaylistConfig.getFlow(safeFlowId);
     if (!latestFlow) return { missing: true };
     if (!isOwnerActive(latestFlow.ownerUserId)) {
       return { skipped: true, inactiveOwner: true };
     }
-    activatePlaylistDownloadGeneration(safeFlowId);
+    activateOwnerDownloadGeneration(safeFlowId);
     return downloadWorker.seedFlowRunWithTracks(safeFlowId, latestFlow, normalizedTracks);
   });
   if (result?.skipped || result?.missing) return result;
@@ -593,7 +591,7 @@ async function researchPlaylistTrack({ playlistId, jobId } = {}) {
   const job = downloadTracker.getJob(safeJobId);
   const belongs = staticPlaylist
     ? staticPlaylistReferencesJob(staticPlaylist, safeJobId)
-    : job?.playlistType === safePlaylistId;
+    : job?.ownerId === safePlaylistId && !job.upgradeForJobId;
   if (!job || !belongs) {
     return { missingJob: true };
   }
@@ -769,8 +767,8 @@ export async function processPlaylistOperation(payload = {}) {
           return runFlowCleanup(payload);
         case "delete-flow":
           return deleteFlow(payload);
-        case "reset-playlists":
-          return resetPlaylists(payload);
+        case "reset-flows":
+          return resetFlows(payload);
         case "adopt-flow-seed":
           return adoptFlowSeed(payload);
         case "static-playlist-create":

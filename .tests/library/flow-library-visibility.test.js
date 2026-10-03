@@ -71,15 +71,14 @@ let jobCounter = 0;
 function addDoneJob(playlistId, filePath, trackName) {
   jobCounter += 1;
   db.prepare(
-    `INSERT INTO playlist_download_jobs
-      (id, artist_name, track_name, album_name, playlist_id, playlist_type, status, final_path, created_at, completed_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'done', ?, ?, ?)`,
+    `INSERT INTO download_jobs
+      (id, artist_name, track_name, album_name, owner_id, status, final_path, created_at, completed_at)
+     VALUES (?, ?, ?, ?, ?, 'done', ?, ?, ?)`,
   ).run(
     `job-${jobCounter}`,
     "Flow Artist",
     trackName,
     "Flow Album",
-    playlistId,
     playlistId,
     filePath,
     Date.now(),
@@ -139,7 +138,7 @@ test("tracks that leave an included flow leave the library", async () => {
   await scan();
   assert.deepEqual(libraryTrackTitles(), ["Kept", "Rotated"]);
 
-  db.prepare("DELETE FROM playlist_download_jobs WHERE id = ?").run(rotatedJob);
+  db.prepare("DELETE FROM download_jobs WHERE id = ?").run(rotatedJob);
   await rm(rotated);
   await scan();
   assert.deepEqual(getLibrary({ availableOnly: false }).tracks.map((t) => t.title), ["Kept"]);

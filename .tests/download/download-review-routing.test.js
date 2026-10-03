@@ -156,7 +156,7 @@ test("pipeline completion leaves the library scan to playlist completion", async
     },
     job: {
       id: "pipeline-job",
-      playlistType: "library",
+      ownerId: "library",
       artistName: "Artist",
       trackName: "Track",
     },
