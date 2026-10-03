@@ -5663,6 +5663,10 @@ textarea {
   white-space: nowrap;
 }
 
+.artist-match-percent {
+  font-variant-numeric: tabular-nums;
+}
+
 
 
 
