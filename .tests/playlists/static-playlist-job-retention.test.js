@@ -62,11 +62,11 @@ test("deleting a playlist with file deletion keeps finished media another playli
   assert.equal(await fs.readFile(file, "utf8"), "disposable audio");
 });
 
-test("replacing tracks with file deletion keeps a removed job another playlist references", async (t) => {
+test("removing a downloaded track keeps it while another playlist references it", async (t) => {
   const { source, survivor, jobId } = fixture(t);
   const file = await libraryFile("Track.flac", "referenced audio");
   downloadTracker.setDone(jobId, file);
-  await operations.updateStaticPlaylist({ playlistId: source.id, tracks: [], hasTracksUpdate: true, deleteUnsharedFiles: true });
+  await operations.processPlaylistOperation({ kind: "static-playlist-delete-track", playlistId: source.id, jobId });
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(source.id).tracks.length, 0);
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(survivor.id).tracks[0].jobId, jobId);
   assert.equal(await fs.readFile(file, "utf8"), "referenced audio");
@@ -108,14 +108,17 @@ test("removing tracks without file deletion keeps finished downloads in the Libr
   assert.equal(await fs.readFile(file, "utf8"), "kept audio");
 });
 
-test("an import persistence failure preserves an unshared completed job and its file", async (t) => {
+test("a removal that cannot be saved preserves an unshared completed job and its file", async (t) => {
   const { source, survivor, jobId } = fixture(t);
   config.flowPlaylistConfig.deleteStaticPlaylist(survivor.id);
   const file = await libraryFile("Track.flac", "original audio");
   downloadTracker.setDone(jobId, file);
   db.exec("CREATE TRIGGER reject_import BEFORE INSERT ON settings WHEN NEW.key = 'staticPlaylists' BEGIN SELECT RAISE(ABORT, 'import save rejected'); END");
   t.after(() => db.exec("DROP TRIGGER IF EXISTS reject_import"));
-  await assert.rejects(operations.updateStaticPlaylist({ playlistId: source.id, tracks: [], hasTracksUpdate: true, deleteUnsharedFiles: true }), /import save rejected/);
+  await assert.rejects(
+    operations.processPlaylistOperation({ kind: "static-playlist-delete-track", playlistId: source.id, jobId }),
+    /import save rejected/,
+  );
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(source.id).tracks.length, 1);
   assert.equal(downloadTracker.getJob(jobId)?.finalPath, file);
   assert.equal(downloadTracker.getJob(jobId)?.queuedForPlaylist, true);

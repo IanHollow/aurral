@@ -335,12 +335,8 @@ test("removing finished static playlist tracks cancels their quality upgrades on
   assert.equal(downloadTracker.getJob(keptJobId)?.queuedForPlaylist, false);
   assert.equal(downloadTracker.getJob(keptUpgradeJobId)?.status, "pending");
 
-  await operationsModule.updateStaticPlaylist({
-    playlistId,
-    tracks: [],
-    hasTracksUpdate: true,
-    deleteUnsharedFiles: true,
-  });
+  t.mock.method(playlistManager, "refreshPlaylist", async () => {});
+  await processPlaylistOperation({ kind: "static-playlist-delete-track", playlistId, jobId: deletedJobId });
 
   assert.equal(downloadTracker.getJob(deletedJobId), null);
   assert.equal(downloadTracker.getJob(upgradeJobId), null);

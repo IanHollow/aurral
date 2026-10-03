@@ -471,7 +471,6 @@ export async function updateStaticPlaylist({
   hasTracksUpdate = false,
   hasImportSourceUpdate = false,
   importSource = null,
-  deleteUnsharedFiles = false,
   mergeImportSource = false,
 } = {}) {
   const safePlaylistId = String(playlistId || "").trim();
@@ -506,9 +505,7 @@ export async function updateStaticPlaylist({
     await withStaticPlaylistRelease([safePlaylistId], async () => {
       const lockedPlaylist = flowPlaylistConfig.getStaticPlaylist(safePlaylistId);
       if (!lockedPlaylist) return;
-      const deleteFiles =
-        deleteUnsharedFiles ||
-        (mergeImportSource && lockedPlaylist.importSource?.keepRemovedTracks === false);
+      const deleteFiles = mergeImportSource && lockedPlaylist.importSource?.keepRemovedTracks === false;
       const kept = keepExistingMemberships(
         lockedPlaylist.tracks,
         normalizedTracks,

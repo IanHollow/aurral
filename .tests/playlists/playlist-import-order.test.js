@@ -922,7 +922,7 @@ test("replacing a static playlist removes Spotify tracks and honors file retenti
       hasTracksUpdate: true,
       hasImportSourceUpdate: true,
       importSource: deletePlaylist.importSource,
-      deleteUnsharedFiles: true,
+      mergeImportSource: true,
     });
     assert.deepEqual(flowPlaylistConfig.getStaticPlaylist(deletePlaylist.id).tracks, []);
     await assert.rejects(fs.access(deletePath));
