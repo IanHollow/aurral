@@ -1,5 +1,4 @@
 import { downloadTracker } from "../../../services/downloadJobs/downloadTracker.js";
-import { downloadWorker } from "../../../services/downloadJobs/downloadWorker.js";
 import {
   DEFAULT_SIZE,
   flowPlaylistConfig,
@@ -12,9 +11,9 @@ import {
   restorePlaylistOperationToken,
 } from "../../../services/playlists/playlistOperations.js";
 import {
-  restartWorkerIfPending,
-  withPlaylistMutation,
-} from "../../../services/downloadJobs/mutationGuards.js";
+  getStaticPlaylistJobIds,
+  staticPlaylistReferencesJob,
+} from "../../../services/playlists/staticPlaylistJobs.js";
 import {
   getUnavailableFlowSourceError,
   normalizeFlowMixForValidation,
@@ -144,23 +143,6 @@ export const restoreFlowMutationToken = (mutation) =>
     previousToken: mutation?.previousToken,
   });
 
-export const pauseStaticPlaylistRetryCycle = async (playlistId) => {
-  await downloadWorker.setRetryCyclePaused(playlistId, true);
-  let cancelledJobs = 0;
-  await withPlaylistMutation(playlistId, async () => {
-    cancelledJobs = downloadTracker.failActiveJobsForPlaylist(
-      playlistId,
-      "Retry cycle paused",
-    );
-  });
-  if (downloadWorker.running) {
-    downloadWorker.wake();
-  } else {
-    await restartWorkerIfPending();
-  }
-  return cancelledJobs;
-};
-
 export const getAccessibleFlow = (user, flowId) =>
   flowPlaylistConfig.getFlowForUser(user, flowId);
 
@@ -191,6 +173,23 @@ export const filterJobsForUser = (user, jobs) =>
     canAccessJobType(user, job?.playlistId || job?.playlistType),
   );
 
+export const getAccessibleJobIds = (user) => {
+  const accessibleStatic = new Set(flowPlaylistConfig.getStaticPlaylistsForUser(user).map((playlist) => playlist.id));
+  const visible = new Set();
+  const hidden = new Set();
+  for (const playlist of flowPlaylistConfig.getStaticPlaylists()) {
+    for (const jobId of getStaticPlaylistJobIds(playlist)) {
+      (accessibleStatic.has(playlist.id) ? visible : hidden).add(jobId);
+    }
+  }
+  const flowIds = new Set(flowPlaylistConfig.getFlowsForUser(user).map((flow) => flow.id));
+  return downloadTracker.getAll()
+    .filter((job) => job.playlistId === LIBRARY_JOB_TYPE
+      ? visible.has(job.id) || !hidden.has(job.id)
+      : flowIds.has(job.playlistId))
+    .map((job) => job.id);
+};
+
 export const queueFlowSideEffect = (kind, labelPrefix, flowId) => {
   const mutation = markFlowMutationToken(flowId);
   const { token, tokenScope } = mutation;
@@ -214,7 +213,11 @@ export const enqueueResearchTrack = async (req, res, playlistId, jobId, labelPre
   }
 
   const job = downloadTracker.getJob(jobId);
-  if (!job || job.playlistType !== playlistId) {
+  const staticPlaylist = flowPlaylistConfig.getStaticPlaylist(playlistId);
+  const belongs = staticPlaylist
+    ? staticPlaylistReferencesJob(staticPlaylist, jobId)
+    : job?.playlistType === playlistId;
+  if (!job || !belongs) {
     return res.status(404).json({ error: "Track not found" });
   }
 

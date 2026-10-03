@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setupIsolatedBackend, cleanupIsolatedState, resetDatabase } from "../helpers/backendTestHarness.js";
+import { addStaticPlaylistJobs } from "../helpers/staticPlaylistJobs.js";
 
 const [state, { db }, { dbOps }, config, { downloadTracker }, { playlistManager }, operations, honker] = await setupIsolatedBackend(
   "shared-job-retention", "backend/config/db-sqlite.js", "backend/db/helpers/index.js",
@@ -23,113 +24,119 @@ test.after(() => cleanupIsolatedState(state));
 function fixture(t) {
   t.mock.method(playlistManager, "refreshPlaylist", async () => {});
   t.mock.method(playlistManager, "scheduleScanLibrary", async () => {});
+  t.mock.method(playlistManager, "ensureSmartPlaylists", async () => {});
   const track = { artistName: "Artist", trackName: "Track", albumName: "Album" };
-  const source = config.flowPlaylistConfig.createStaticPlaylist({ name: "Source", tracks: [track] });
-  const jobId = downloadTracker.addJob(track, source.id);
+  const source = config.flowPlaylistConfig.createStaticPlaylist({ name: "Source", tracks: [] });
+  const [jobId] = addStaticPlaylistJobs({ downloadTracker, flowPlaylistConfig: config.flowPlaylistConfig }, source.id, [track]);
   const survivor = config.flowPlaylistConfig.createStaticPlaylist({ name: "Survivor", tracks: [{ ...track, canonicalJobId: jobId }] });
   return { source, survivor, jobId };
 }
 
-test("single-track removal retains the job and provider work needed by another library membership", async (t) => {
+async function libraryFile(name, contents) {
+  const file = path.join(process.env.DOWNLOAD_FOLDER, "Artist", "Album", name);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, contents);
+  return file;
+}
+
+test("single-track removal keeps a queued job and its provider work while another playlist references it", async (t) => {
   const { source, survivor, jobId } = fixture(t);
-  const queuedId = honker.getPipelineQueue().enqueue({ jobId, playlistId: source.id, playlistGeneration: 0, phase: "poll", source: "deemix", queueUuid: "needed-provider-work" });
+  const payload = { jobId, playlistId: "library", playlistGeneration: 0, phase: "poll", source: "deemix", queueUuid: "needed-provider-work" };
+  const queuedId = honker.getPipelineQueue().enqueue(payload);
   await operations.processPlaylistOperation({ kind: "shared-playlist-delete-track", playlistId: source.id, jobId });
-  assert.equal(downloadTracker.getJob(jobId)?.playlistType, survivor.id);
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(source.id).tracks.length, 0);
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(survivor.id).tracks[0].canonicalJobId, jobId);
-  assert.equal(JSON.parse(db.prepare("SELECT payload FROM _honker_live WHERE id = ?").get(queuedId).payload).playlistId, survivor.id);
+  assert.equal(downloadTracker.getJob(jobId)?.status, "pending");
+  assert.equal(downloadTracker.getJob(jobId)?.queuedForPlaylist, true);
+  assert.deepEqual(JSON.parse(db.prepare("SELECT payload FROM _honker_live WHERE id = ?").get(queuedId).payload), payload);
 });
 
-test("deleting the original playlist preserves a survivor's completed media", async (t) => {
+test("deleting a playlist with file deletion keeps finished media another playlist references", async (t) => {
   const { source, survivor, jobId } = fixture(t);
-  const root = process.env.DOWNLOAD_FOLDER;
-  const file = path.join(root, "aurral-weekly-flow", source.id, "Artist", "Album", "Track.flac");
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, "disposable audio");
+  const file = await libraryFile("Track.flac", "disposable audio");
   downloadTracker.setDone(jobId, file);
   await operations.processPlaylistOperation({ kind: "shared-playlist-delete", playlistId: source.id });
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(source.id), null);
-  const retained = downloadTracker.getJob(jobId);
-  assert.equal(retained?.playlistType, survivor.id);
-  assert.equal(await fs.readFile(retained.finalPath, "utf8"), "disposable audio");
+  assert.equal(config.flowPlaylistConfig.getStaticPlaylist(survivor.id).tracks[0].canonicalJobId, jobId);
+  assert.equal(downloadTracker.getJob(jobId)?.finalPath, file);
+  assert.equal(await fs.readFile(file, "utf8"), "disposable audio");
 });
 
-test("replacing imported tracks preserves a removed job referenced by another playlist", async (t) => {
+test("replacing tracks with file deletion keeps a removed job another playlist references", async (t) => {
   const { source, survivor, jobId } = fixture(t);
-  t.mock.method(playlistManager, "ensureSmartPlaylists", async () => {});
-  await operations.updateStaticPlaylist({ playlistId: source.id, tracks: [], hasTracksUpdate: true });
-  assert.equal(downloadTracker.getJob(jobId)?.playlistType, survivor.id);
+  const file = await libraryFile("Track.flac", "referenced audio");
+  downloadTracker.setDone(jobId, file);
+  await operations.updateStaticPlaylist({ playlistId: source.id, tracks: [], hasTracksUpdate: true, deleteUnsharedFiles: true });
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(source.id).tracks.length, 0);
+  assert.equal(config.flowPlaylistConfig.getStaticPlaylist(survivor.id).tracks[0].canonicalJobId, jobId);
+  assert.equal(await fs.readFile(file, "utf8"), "referenced audio");
+});
+
+test("removing the last reference deletes queued work and downloaded files but keeps other Library tracks", async (t) => {
+  const { source, survivor, jobId } = fixture(t);
+  config.flowPlaylistConfig.deleteStaticPlaylist(survivor.id);
+  const [queuedId, reusedId] = addStaticPlaylistJobs(
+    { downloadTracker, flowPlaylistConfig: config.flowPlaylistConfig },
+    source.id,
+    [{ artistName: "Artist", trackName: "Queued" }, { artistName: "Artist", trackName: "Reused" }],
+  );
+  const downloaded = await libraryFile("Track.flac", "playlist download");
+  const reused = await libraryFile("Reused.flac", "library audio");
+  downloadTracker.setDone(jobId, downloaded);
+  downloadTracker.setDone(reusedId, reused);
+  downloadTracker.setQueuedForPlaylist(reusedId, false);
+  const libraryJobId = downloadTracker.addJob({ artistName: "Artist", trackName: "Requested" }, "library");
+
+  await operations.processPlaylistOperation({ kind: "shared-playlist-delete", playlistId: source.id });
+
+  assert.equal(downloadTracker.getJob(jobId), null);
+  assert.equal(downloadTracker.getJob(queuedId), null);
+  await assert.rejects(fs.access(downloaded));
+  assert.equal(downloadTracker.getJob(reusedId)?.finalPath, reused);
+  assert.equal(await fs.readFile(reused, "utf8"), "library audio");
+  assert.ok(downloadTracker.getJob(libraryJobId));
+});
+
+test("removing tracks without file deletion keeps finished downloads in the Library", async (t) => {
+  const { source, survivor, jobId } = fixture(t);
+  config.flowPlaylistConfig.deleteStaticPlaylist(survivor.id);
+  const file = await libraryFile("Track.flac", "kept audio");
+  downloadTracker.setDone(jobId, file);
+  await operations.updateStaticPlaylist({ playlistId: source.id, tracks: [], hasTracksUpdate: true });
+  assert.equal(config.flowPlaylistConfig.getStaticPlaylist(source.id).tracks.length, 0);
+  assert.equal(downloadTracker.getJob(jobId)?.queuedForPlaylist, false);
+  assert.equal(await fs.readFile(file, "utf8"), "kept audio");
 });
 
 test("an import persistence failure preserves an unshared completed job and its file", async (t) => {
   const { source, survivor, jobId } = fixture(t);
   config.flowPlaylistConfig.deleteStaticPlaylist(survivor.id);
-  const file = path.join(process.env.DOWNLOAD_FOLDER, "aurral-playlists", source.id, "Track.flac");
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, "original audio");
+  const file = await libraryFile("Track.flac", "original audio");
   downloadTracker.setDone(jobId, file);
   db.exec("CREATE TRIGGER reject_import BEFORE INSERT ON settings WHEN NEW.key = 'sharedPlaylists' BEGIN SELECT RAISE(ABORT, 'import save rejected'); END");
   t.after(() => db.exec("DROP TRIGGER IF EXISTS reject_import"));
   await assert.rejects(operations.updateStaticPlaylist({ playlistId: source.id, tracks: [], hasTracksUpdate: true, deleteUnsharedFiles: true }), /import save rejected/);
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(source.id).tracks.length, 1);
   assert.equal(downloadTracker.getJob(jobId)?.finalPath, file);
+  assert.equal(downloadTracker.getJob(jobId)?.queuedForPlaylist, true);
   assert.equal(await fs.readFile(file, "utf8"), "original audio");
   db.exec("DROP TRIGGER reject_import");
 });
 
-test("a single-removal retry refreshes the surviving playlist after a service failure", async (t) => {
-  const { source, survivor, jobId } = fixture(t);
-  let fail = true;
-  const refreshed = [];
-  t.mock.method(playlistManager, "refreshPlaylist", async (id) => {
-    refreshed.push(id);
-    if (id === survivor.id && fail) throw new Error("survivor unavailable");
-  });
-  const operation = { kind: "shared-playlist-delete-track", playlistId: source.id, jobId };
-  await assert.rejects(operations.processPlaylistOperation(operation), /survivor unavailable/);
-  assert.equal(downloadTracker.getJob(jobId)?.playlistType, survivor.id);
-  fail = false;
-  refreshed.length = 0;
-  await operations.processPlaylistOperation(operation);
-  assert.ok(refreshed.includes(survivor.id));
-});
-
-test("removal locks include reused files and quality-upgrade album peers", async (t) => {
-  const { source, survivor, jobId } = fixture(t);
-  config.flowPlaylistConfig.deleteStaticPlaylist(survivor.id);
-  const fileOwner = config.flowPlaylistConfig.createStaticPlaylist({ name: "File owner" });
-  const peerOwner = config.flowPlaylistConfig.createStaticPlaylist({ name: "Upgrade peer owner" });
-  const file = path.join(process.env.DOWNLOAD_FOLDER, "shared.flac");
-  downloadTracker.setDone(jobId, file);
-  const sharedJobId = downloadTracker.addJob({ artistName: "Artist", trackName: "Shared" }, fileOwner.id);
-  downloadTracker.setDone(sharedJobId, file);
-  const upgradeId = downloadTracker.addReplacementSearchJob(downloadTracker.getJob(jobId));
-  const peerId = downloadTracker.addJob({ artistName: "Artist", trackName: "Peer" }, peerOwner.id);
-  honker.getPipelineQueue().enqueue({ jobId: upgradeId, playlistId: source.id, albumGrab: true, albumGroupJobIds: [upgradeId, peerId] });
-  const { getPlaylistRemovalLockIds } = await import("../../backend/services/playlists/trackRemoval.js");
-  const ids = getPlaylistRemovalLockIds(source.id, [downloadTracker.getJob(jobId)]);
-  assert.ok(ids.includes(fileOwner.id), "the other file owner must be locked before paths change");
-  assert.ok(ids.includes(peerOwner.id), "the upgrade peer must be locked before provider work changes");
-});
-
 test("whole-playlist deletion resumes external cleanup after membership commits", async (t) => {
   const { source, survivor, jobId } = fixture(t);
-  const file = path.join(process.env.DOWNLOAD_FOLDER, "aurral-playlists", source.id, "Completed.flac");
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, "completed retained audio");
+  const file = await libraryFile("Completed.flac", "completed retained audio");
   downloadTracker.setDone(jobId, file);
-  t.mock.method(playlistManager, "ensureSmartPlaylists", async () => {});
   let fail = true;
   t.mock.method(playlistManager, "deletePlaybackPlaylist", async () => {
     if (fail) throw new Error("playback unavailable");
   });
   const operation = { kind: "shared-playlist-delete", playlistId: source.id };
   await assert.rejects(operations.processPlaylistOperation(operation), /playback unavailable/);
-  assert.equal(downloadTracker.getJob(jobId).playlistType, survivor.id);
   assert.ok(config.flowPlaylistConfig.getStaticPlaylist(source.id));
   fail = false;
   await operations.processPlaylistOperation(operation);
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(source.id), null);
-  assert.equal(downloadTracker.getJob(jobId).playlistType, survivor.id);
+  assert.equal(config.flowPlaylistConfig.getStaticPlaylist(survivor.id).tracks[0].canonicalJobId, jobId);
+  assert.equal(await fs.readFile(file, "utf8"), "completed retained audio");
 });

@@ -335,12 +335,9 @@ export async function removePlaylistFileIfUnshared(finalPath, playlistId, option
   const safePlaylistId = String(playlistId || "").trim();
   if (!safePlaylistId || typeof finalPath !== "string") return { action: "skipped" };
 
-  const staticPlaylist = flowPlaylistConfig.getStaticPlaylist(safePlaylistId);
   const playlistRoot = isFlowPlaylistType(safePlaylistId)
     ? path.resolve(downloadRoot, AURRAL_FLOWS_DIR, safePlaylistId)
-    : staticPlaylist && options.deleteIfUnshared === true
-      ? downloadRoot
-      : null;
+    : null;
   const resolved = path.resolve(finalPath);
   if (!playlistRoot || !isPathInsideRoot(resolved, playlistRoot)) {
     return { action: "skipped" };
@@ -380,6 +377,28 @@ export async function removePlaylistFileIfUnshared(finalPath, playlistId, option
     );
     return { action: nextPath ? "relocated" : "skipped" };
   }
+  await fs.rm(resolved, { force: true });
+  forgetPlaybackRetainedFile(resolved);
+  return { action: "deleted" };
+}
+
+export async function removeLibraryFileIfUnshared(finalPath, options = {}) {
+  const downloadRoot = path.resolve(options.downloadRoot || resolveDownloadRoot());
+  const resolved = path.resolve(String(finalPath || ""));
+  if (
+    !isPathInsideRoot(resolved, downloadRoot) ||
+    isPathInsideRoot(resolved, path.resolve(downloadRoot, AURRAL_FLOWS_DIR))
+  ) {
+    return { action: "skipped" };
+  }
+  const stillUsed = downloadTracker.getAll().some((job) =>
+    job?.status === "done" && typeof job.finalPath === "string" && path.resolve(job.finalPath) === resolved);
+  if (stillUsed) return { action: "skipped" };
+  const deletionGuard = createPlaybackDeletionGuard({
+    excludeEntityIds: options.excludeEntityIds || [],
+    playlistRoot: downloadRoot,
+  });
+  if (!(await deletionGuard.canDelete(resolved))) return { action: "retained" };
   await fs.rm(resolved, { force: true });
   forgetPlaybackRetainedFile(resolved);
   return { action: "deleted" };
@@ -653,7 +672,7 @@ export async function repairJobsUnderRemovedPlaylistDir(playlistType, options = 
   let repaired = 0;
   let requeued = 0;
   let skipped = 0;
-  const changedPlaylistTypes = new Set();
+  const changedJobs = [];
 
   for (const job of downloadTracker.getAll()) {
     if (job?.status !== "done" || typeof job?.finalPath !== "string") continue;
@@ -668,34 +687,30 @@ export async function repairJobsUnderRemovedPlaylistDir(playlistType, options = 
     });
     if (result.action === "repaired") {
       repaired += 1;
-      changedPlaylistTypes.add(String(job.playlistType || ""));
+      changedJobs.push(job);
     } else if (result.action === "requeued") {
       requeued += 1;
-      changedPlaylistTypes.add(String(job.playlistType || ""));
+      changedJobs.push(job);
     } else if (downloadTracker.setPending(job.id, "Source playlist was removed")) {
       requeued += 1;
-      changedPlaylistTypes.add(String(job.playlistType || ""));
+      changedJobs.push(job);
     } else {
       skipped += 1;
     }
   }
 
+  const { playlistManager } = await import("../playlists/playlistManager.js");
+  const changedPlaylistTypes = playlistManager.playlistIdsForJobs(changedJobs);
   if (repaired > 0 || requeued > 0) {
-    const { playlistManager } = await import("../playlists/playlistManager.js");
-    for (const changedPlaylistType of changedPlaylistTypes) {
-      await playlistManager.refreshPlaylist(changedPlaylistType).catch((error) => {
-        console.warn(`[FileReuse] Could not refresh playlist ${safeLogDiagnostic(changedPlaylistType)}:`,
-          safeLogDiagnostic(error));
-      });
-    }
-    if (changedPlaylistTypes.has("library")) playlistManager.scheduleScanLibrary();
+    await refreshPlaylistsSafely(playlistManager, changedPlaylistTypes);
+    if (changedJobs.some((job) => job.playlistType === "library")) playlistManager.scheduleScanLibrary();
   }
 
   return {
     repaired,
     requeued,
     skipped,
-    changedPlaylistTypes: [...changedPlaylistTypes],
+    changedPlaylistTypes,
   };
 }
 
@@ -775,7 +790,7 @@ export async function repairReusableTrackLinks(options = {}) {
   let requeued = 0;
   let skipped = 0;
   let failures = 0;
-  const changedPlaylistTypes = new Set();
+  const changedJobs = [];
   for (const job of batch) {
     try {
       const result = await restoreCompletedTrack(job, {
@@ -786,14 +801,10 @@ export async function repairReusableTrackLinks(options = {}) {
       });
       if (result.action === "repaired") {
         repaired += 1;
-        if (job?.playlistType) {
-          changedPlaylistTypes.add(String(job.playlistType));
-        }
+        changedJobs.push(job);
       } else if (result.action === "requeued") {
         requeued += 1;
-        if (job?.playlistType) {
-          changedPlaylistTypes.add(String(job.playlistType));
-        }
+        changedJobs.push(job);
       } else {
         skipped += 1;
       }
@@ -811,13 +822,8 @@ export async function repairReusableTrackLinks(options = {}) {
       `[FileReuse] Track health sweep repaired ${repaired}, requeued ${requeued} of ${batch.length} checked tracks`,
     );
     const { playlistManager } = await import("../playlists/playlistManager.js");
-    for (const playlistType of changedPlaylistTypes) {
-      await playlistManager.refreshPlaylist(playlistType).catch((error) => {
-        console.warn(`[FileReuse] Could not refresh playlist ${safeLogDiagnostic(playlistType)}:`,
-          safeLogDiagnostic(error));
-      });
-    }
-    if (changedPlaylistTypes.has("library")) playlistManager.scheduleScanLibrary();
+    await refreshPlaylistsSafely(playlistManager, playlistManager.playlistIdsForJobs(changedJobs));
+    if (changedJobs.some((job) => job.playlistType === "library")) playlistManager.scheduleScanLibrary();
     if (requeued > 0) {
       const [{ downloadWorker }, { restartWorkerIfPending }] = await Promise.all([
         import("./downloadWorker.js"),
@@ -867,7 +873,7 @@ export async function moveHandedOverTracksToLidarr(options = {}) {
   }
 
   const movedPaths = [];
-  const changedPlaylistTypes = new Set();
+  const changedJobs = [];
   let moved = 0;
   for (const [oldPath, jobs] of jobsByPath) {
     const source = await findLidarrSource(jobs[0], { targetPlaylistType: "library" });
@@ -879,7 +885,7 @@ export async function moveHandedOverTracksToLidarr(options = {}) {
         source.albumName || job.albumName || null,
         source.externalPath || null,
       );
-      if (job.playlistType) changedPlaylistTypes.add(String(job.playlistType));
+      changedJobs.push(job);
     }
     moved += jobs.length;
     movedPaths.push(oldPath);
@@ -887,12 +893,7 @@ export async function moveHandedOverTracksToLidarr(options = {}) {
   if (movedPaths.length === 0) return { moved: 0, deleted: 0 };
 
   const { playlistManager } = await import("../playlists/playlistManager.js");
-  for (const playlistType of changedPlaylistTypes) {
-    await playlistManager.refreshPlaylist(playlistType).catch((error) => {
-      console.warn(`[FileReuse] Could not refresh playlist ${safeLogDiagnostic(playlistType)}:`,
-        safeLogDiagnostic(error));
-    });
-  }
+  await refreshPlaylistsSafely(playlistManager, playlistManager.playlistIdsForJobs(changedJobs));
   const deletionGuard = options.deletionGuard || createPlaybackDeletionGuard({ playlistRoot: downloadRoot });
   let deleted = 0;
   for (const oldPath of movedPaths) {
@@ -904,6 +905,15 @@ export async function moveHandedOverTracksToLidarr(options = {}) {
   scheduleLibraryScanJob({ includeLidarr: false, changedPaths: movedPaths });
   console.log(`[FileReuse] Moved ${moved} tracks onto Lidarr files and removed ${deleted} Aurral copies`);
   return { moved, deleted };
+}
+
+async function refreshPlaylistsSafely(playlistManager, playlistIds) {
+  for (const playlistId of playlistIds) {
+    await playlistManager.refreshPlaylist(playlistId).catch((error) => {
+      console.warn(`[FileReuse] Could not refresh playlist ${safeLogDiagnostic(playlistId)}:`,
+        safeLogDiagnostic(error));
+    });
+  }
 }
 
 async function refreshPlaylistAfterReuse(

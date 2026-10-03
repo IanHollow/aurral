@@ -1606,10 +1606,15 @@ export class LibraryManager {
     const requestedTrackIds = Array.isArray(options.trackIds)
       ? new Set(options.trackIds.map(Number))
       : null;
-    const missingTracks = albumTracks.filter((track) =>
-      track.available !== true &&
+    const requestedTracks = albumTracks.filter((track) =>
       track.monitored !== false &&
       (!requestedTrackIds || requestedTrackIds.has(Number(track.id))));
+    for (const job of albumJobs) {
+      if (requestedTracks.some((track) => jobMatchesTrack(job, track))) {
+        downloadTracker.setQueuedForPlaylist(job.id, false);
+      }
+    }
+    const missingTracks = requestedTracks.filter((track) => track.available !== true);
     const sourceConfigured = isAnyDownloadSourceConfigured();
     const jobIds = [];
     const trackedJobIds = [];

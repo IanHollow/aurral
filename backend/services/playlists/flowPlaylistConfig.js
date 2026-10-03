@@ -384,38 +384,6 @@ export const dedupePlaylistTracks = (tracks) => {
   return uniqueTracks;
 };
 
-export const rebuildStaticPlaylistTracksFromJobs = (configTracks, jobs) => {
-  const jobList = Array.isArray(jobs) ? jobs : [];
-  const unmatchedJobIds = new Set(jobList.map((job) => job.id));
-  const remainingTracks = [];
-  for (const track of dedupePlaylistTracks(configTracks)) {
-    const match = jobList.find(
-      (job) => unmatchedJobIds.has(job.id) && tracksShareMembership(job, track),
-    );
-    if (!match) continue;
-    unmatchedJobIds.delete(match.id);
-    remainingTracks.push(track);
-  }
-  for (const job of sortJobsByCreatedAt(jobList)) {
-    if (!unmatchedJobIds.has(job.id)) continue;
-    unmatchedJobIds.delete(job.id);
-    const track = normalizePlaylistTrack({
-      artistName: job?.artistName,
-      trackName: job?.trackName,
-      albumName: job?.albumName || null,
-      artistMbid: job?.artistMbid || null,
-      albumMbid: job?.albumMbid || null,
-      trackMbid: job?.trackMbid || null,
-      releaseYear: job?.releaseYear || null,
-      durationMs: job?.durationMs || null,
-      artistAliases: job?.artistAliases || [],
-      reason: job?.reason || null,
-    });
-    if (track) remainingTracks.push(track);
-  }
-  return remainingTracks;
-};
-
 export const filterMissingPlaylistTracks = (existingTracks, incomingTracks) => {
   const seen = new Set(
     dedupePlaylistTracks(existingTracks).map((track) => buildPlaylistTrackIdentity(track)),

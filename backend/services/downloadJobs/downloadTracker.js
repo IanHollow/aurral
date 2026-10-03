@@ -133,6 +133,7 @@ function rowToJob(row) {
     qualityUpgradeCheckedAt: row.quality_upgrade_checked_at ?? null,
     upgradeForJobId: row.upgrade_for_job_id || null,
     manualReplacementSearch: row.manual_replacement_search === 1,
+    queuedForPlaylist: row.queued_for_playlist === 1,
     retryCycle: false,
   };
 }
@@ -174,9 +175,10 @@ const insertStmt = db.prepare(`
     quality_checked_at,
     quality_upgrade_checked_at,
     upgrade_for_job_id,
-    manual_replacement_search
+    manual_replacement_search,
+    queued_for_playlist
   )
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const updateStmt = db.prepare(`
@@ -207,7 +209,8 @@ const updateStmt = db.prepare(`
       quality_checked_at = ?,
       quality_upgrade_checked_at = ?,
       upgrade_for_job_id = ?,
-      manual_replacement_search = ?
+      manual_replacement_search = ?,
+      queued_for_playlist = ?
   WHERE id = ?
 `);
 
@@ -704,6 +707,7 @@ export class DownloadTracker {
           job.qualityUpgradeCheckedAt ?? null,
           job.upgradeForJobId ?? null,
           job.manualReplacementSearch ? 1 : 0,
+          job.queuedForPlaylist ? 1 : 0,
           job.id,
         );
       }
@@ -760,6 +764,7 @@ export class DownloadTracker {
       job.qualityUpgradeCheckedAt ?? null,
       job.upgradeForJobId ?? null,
       job.manualReplacementSearch ? 1 : 0,
+      job.queuedForPlaylist ? 1 : 0,
     );
     this._touchRevision();
   }
@@ -793,6 +798,7 @@ export class DownloadTracker {
       job.qualityUpgradeCheckedAt ?? null,
       job.upgradeForJobId ?? null,
       job.manualReplacementSearch ? 1 : 0,
+      job.queuedForPlaylist ? 1 : 0,
       job.id,
     );
     recordAlbumTrackState(job);
@@ -834,6 +840,7 @@ export class DownloadTracker {
       requestGroupId: track?.requestGroupId
         ? String(track.requestGroupId).trim() || null
         : null,
+      queuedForPlaylist: options?.queuedForPlaylist === true,
       status: "pending",
       startedAt: null,
       completedAt: null,
@@ -851,6 +858,14 @@ export class DownloadTracker {
     this.pendingSet.add(id);
     this.pendingRetrySet.delete(id);
     return id;
+  }
+
+  setQueuedForPlaylist(id, queuedForPlaylist) {
+    const job = this.jobs.get(id);
+    if (!job || job.queuedForPlaylist === queuedForPlaylist) return false;
+    job.queuedForPlaylist = queuedForPlaylist;
+    this._update(job);
+    return true;
   }
 
   ensureLibraryTrackJob(track, finalPath) {

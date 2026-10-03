@@ -8,6 +8,7 @@ import {
   resetDatabase,
 } from "../helpers/backendTestHarness.js";
 import { getStaticPlaylistTrackCount } from "../../frontend/src/pages/playlists/playlistStats.js";
+import { addStaticPlaylistJobs } from "../helpers/staticPlaylistJobs.js";
 
 const [isolatedState, { db }, { dbOps }, { flowPlaylistConfig }, snapshotModule] =
   await setupIsolatedBackend(
@@ -48,7 +49,7 @@ test("status snapshot includes static playlist summaries without embedding track
   const { downloadTracker } = await importFromRepo(
     "backend/services/downloadJobs/downloadTracker.js",
   );
-  downloadTracker.addJob(tracks[0], playlist.id);
+  addStaticPlaylistJobs({ downloadTracker, flowPlaylistConfig }, playlist.id, [tracks[0]]);
 
   const status = getPlaylistStatusSnapshot();
   const shared = (status.sharedPlaylists || []).find((p) => p.id === playlist.id);
@@ -90,14 +91,9 @@ test("status snapshot trackIdentities includes pending download jobs", async () 
   const playlist = flowPlaylistConfig.createStaticPlaylist({
     name: "Pending Mix",
   });
-  const jobId = downloadTracker.addJob(
-    {
-      artistName: "Radiohead",
-      trackName: "Karma Police",
-      albumName: "OK Computer",
-    },
-    playlist.id,
-  );
+  const [jobId] = addStaticPlaylistJobs({ downloadTracker, flowPlaylistConfig }, playlist.id, [
+    { artistName: "Radiohead", trackName: "Karma Police", albumName: "OK Computer" },
+  ]);
   assert.ok(jobId);
 
   const status = getPlaylistStatusSnapshot();
@@ -118,10 +114,9 @@ test("status snapshot trackCount includes failed download jobs", async () => {
     "backend/services/downloadJobs/downloadTracker.js",
   );
   const playlist = flowPlaylistConfig.createStaticPlaylist({ name: "Failed Mix" });
-  const jobId = downloadTracker.addJob(
+  const [jobId] = addStaticPlaylistJobs({ downloadTracker, flowPlaylistConfig }, playlist.id, [
     { artistName: "Radiohead", trackName: "Karma Police" },
-    playlist.id,
-  );
+  ]);
   downloadTracker.setFailed(jobId, "Not found");
 
   const status = getPlaylistStatusSnapshot();

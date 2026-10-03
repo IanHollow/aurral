@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import fs from "fs";
 import path from "path";
 import { PLAYLIST_FILES_DIR, resolveDownloadRoot } from "../services/downloadPaths.js";
@@ -111,10 +112,143 @@ function removeRetiredIntegrations(db) {
   db.prepare("UPDATE settings SET value = ? WHERE key = 'integrations'").run(JSON.stringify(integrations));
 }
 
+const LIBRARY_OWNER = "library";
+
+function readJsonSetting(db, key, fallback) {
+  try {
+    return JSON.parse(readSetting(db, key) || "null") ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const text = (value) => String(value ?? "").trim();
+const trackIdentity = (track) => [
+  text(track.artistName ?? track.artist_name).toLowerCase(),
+  text(track.trackName ?? track.track_name).toLowerCase(),
+  text(track.albumName ?? track.album_name).toLowerCase(),
+  text(track.artistMbid ?? track.artist_mbid),
+  text(track.albumMbid ?? track.album_mbid),
+  text(track.trackMbid ?? track.track_mbid),
+  text(track.releaseYear ?? track.release_year),
+].join("\u0001");
+const coreIdentity = (track) => [
+  text(track.artistName ?? track.artist_name).toLowerCase(),
+  text(track.trackName ?? track.track_name).toLowerCase(),
+].join("\u0001");
+
+function trackFromJob(job) {
+  return {
+    artistName: job.artist_name,
+    trackName: job.track_name,
+    albumName: job.album_name || null,
+    artistMbid: job.artist_mbid || null,
+    albumMbid: job.album_mbid || null,
+    trackMbid: job.track_mbid || null,
+    releaseYear: job.release_year || null,
+    durationMs: job.duration_ms ?? null,
+    artistAliases: (() => {
+      try {
+        return JSON.parse(job.artist_aliases || "[]");
+      } catch {
+        return [];
+      }
+    })(),
+    reason: job.reason || null,
+    canonicalJobId: job.id,
+    membershipId: randomUUID(),
+  };
+}
+
+function linkPlaylistTracks(playlist, jobs) {
+  const tracks = (Array.isArray(playlist.tracks) ? playlist.tracks : []).map((track) => ({ ...track }));
+  for (const job of jobs) {
+    const track =
+      tracks.find((entry) => !entry.canonicalJobId && trackIdentity(entry) === trackIdentity(job)) ||
+      tracks.find((entry) => !entry.canonicalJobId && coreIdentity(entry) === coreIdentity(job));
+    if (track) track.canonicalJobId = job.id;
+    else tracks.push(trackFromJob(job));
+  }
+  return { ...playlist, tracks, trackCount: tracks.length };
+}
+
+function hasTable(db, name) {
+  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+}
+
+function moveStaticPlaylistJobsIntoLibrary(db) {
+  db.exec("ALTER TABLE playlist_download_jobs ADD COLUMN queued_for_playlist INTEGER NOT NULL DEFAULT 0");
+  const playlists = readJsonSetting(db, "sharedPlaylists", []);
+  const flowIds = new Set(readJsonSetting(db, "flows", []).map((flow) => flow?.id).filter(Boolean));
+  const staticIds = new Set(playlists.map((playlist) => playlist?.id).filter(Boolean));
+  const isMoved = (owner) => owner !== LIBRARY_OWNER && !flowIds.has(owner);
+  const libraryGeneration = Number(
+    db.prepare("SELECT generation FROM weekly_flow_download_cancellations WHERE playlist_id = ?").get(LIBRARY_OWNER)?.generation || 0,
+  );
+  const jobs = db.prepare("SELECT * FROM playlist_download_jobs ORDER BY created_at, id").all()
+    .filter((job) => isMoved(job.playlist_id || job.playlist_type));
+  const deletedJobIds = new Set();
+  const movedJobIds = new Set();
+  const jobsByPlaylist = new Map();
+  const moveJob = db.prepare(`
+    UPDATE playlist_download_jobs
+    SET playlist_id = ?, playlist_type = ?, playlist_generation = ?, queued_for_playlist = ?
+    WHERE id = ?
+  `);
+  for (const job of jobs) {
+    const owner = job.playlist_id || job.playlist_type;
+    const upgrade = job.playlist_type === "quality-upgrade";
+    const unfinished = job.status !== "done";
+    if (!staticIds.has(owner) && unfinished) {
+      db.prepare("DELETE FROM playlist_download_jobs WHERE id = ?").run(job.id);
+      deletedJobIds.add(job.id);
+      continue;
+    }
+    const queuedForPlaylist = staticIds.has(owner) && !upgrade && (unfinished || Boolean(job.download_client));
+    moveJob.run(LIBRARY_OWNER, upgrade ? "quality-upgrade" : LIBRARY_OWNER, libraryGeneration, queuedForPlaylist ? 1 : 0, job.id);
+    movedJobIds.add(job.id);
+    if (staticIds.has(owner) && !upgrade) {
+      jobsByPlaylist.set(owner, [...(jobsByPlaylist.get(owner) || []), job]);
+    }
+  }
+  const nextPlaylists = playlists.map((playlist) =>
+    jobsByPlaylist.has(playlist.id) ? linkPlaylistTracks(playlist, jobsByPlaylist.get(playlist.id)) : playlist);
+  db.prepare("UPDATE settings SET value = ? WHERE key = 'sharedPlaylists'").run(JSON.stringify(nextPlaylists));
+  db.prepare("DELETE FROM weekly_flow_download_cancellations WHERE playlist_id != ? AND playlist_id NOT IN (SELECT value FROM json_each(?))")
+    .run(LIBRARY_OWNER, JSON.stringify([...flowIds]));
+  const moveProviderWork = db.prepare("UPDATE weekly_flow_download_provider_work SET playlist_id = ? WHERE job_id = ?");
+  for (const jobId of movedJobIds) moveProviderWork.run(LIBRARY_OWNER, jobId);
+  for (const jobId of deletedJobIds) {
+    db.prepare("DELETE FROM weekly_flow_download_provider_work WHERE job_id = ?").run(jobId);
+  }
+  if (!hasTable(db, "_honker_live")) return;
+  for (const row of db.prepare("SELECT id, queue, payload FROM _honker_live WHERE queue IN ('slskd-pipeline', 'playlist-retry')").all()) {
+    let payload;
+    try {
+      payload = JSON.parse(row.payload);
+    } catch {
+      continue;
+    }
+    if (row.queue === "playlist-retry") {
+      if (isMoved(payload?.playlistType || payload?.playlistId)) {
+        db.prepare("DELETE FROM _honker_live WHERE id = ?").run(row.id);
+      }
+    } else if (deletedJobIds.has(payload?.jobId)) {
+      db.prepare("DELETE FROM _honker_live WHERE id = ?").run(row.id);
+    } else if (movedJobIds.has(payload?.jobId) && isMoved(payload.playlistId)) {
+      db.prepare("UPDATE _honker_live SET payload = ? WHERE id = ?").run(
+        JSON.stringify({ ...payload, playlistId: LIBRARY_OWNER, playlistGeneration: libraryGeneration }),
+        row.id,
+      );
+    }
+  }
+}
+
 export function upgradeFromAurral2(db) {
   const removeSettings = db.prepare("DELETE FROM settings WHERE key GLOB ?");
   for (const pattern of RETIRED_SETTING_PATTERNS) removeSettings.run(pattern);
   removeRetiredIntegrations(db);
+  moveStaticPlaylistJobsIntoLibrary(db);
   db.exec(`
     ALTER TABLE users DROP COLUMN needs_identity_migration;
     ALTER TABLE users DROP COLUMN allow_identity_adoption;

@@ -20,9 +20,9 @@ A static playlist track references a Library job by `jobId`. Adding a track reus
 
 ### Who asked for a job
 
-A Library job records whether a static playlist queued it, in `queued_for_playlist`. Aurral sets it only when it downloads the track for the playlist. A job that points at a file already in the Library never has it.
+A Library job records whether a static playlist queued it, in `queued_for_playlist`. Aurral sets it only when it downloads the track for the playlist, or when saving a flow as a static playlist keeps a flow file. A job that points at a file already in the Library never has it.
 
-A direct request clears it on the existing job. Direct requests are adding a track to the Library, an album request, monitoring, and **Re-search**.
+A direct request clears it on the existing job. Direct requests are adding a track to the Library, an album request, monitoring, **Re-search** from the Library, and a Subsonic favorite while favorites keep tracks. **Re-search** from a playlist keeps it.
 
 ### Removing tracks
 
@@ -32,11 +32,13 @@ Removing a track, deleting a playlist, a sync that drops a track, and a Subsonic
 - no static playlist still references it, and
 - it is not an upgrade job.
 
-Releasing an unfinished job cancels its download and its upgrades, then deletes the job.
+Releasing an unfinished job cancels its download and its upgrades, then deletes the job. When the job leads an album download that another track still needs, that track takes over the download instead.
 
-Releasing a finished job deletes the job and its file, following the file safety rules in [0003](0003-playlist-download-removal-safety.md). The exception is a sync drop while **Keep removed tracks in library** is on. That clears `queued_for_playlist` instead, so the track stays in the Library like any other.
+Releasing a finished job deletes the job and its file, following the file safety rules in [0003](0003-playlist-download-removal-safety.md). The exceptions are a move to another playlist, a sync drop while **Keep removed tracks in library** is on, and a track list replaced through the API. Those clear `queued_for_playlist` instead, so the track stays in the Library like any other.
 
 Other jobs stay in the Library. Deleting a playlist never moves a job to another playlist.
+
+A release holds the download locks of the playlist and the Library, so it waits for a download step or import in progress. If a download cannot be cancelled, the change is not saved and the download fails so it can be retried.
 
 ## Migration
 

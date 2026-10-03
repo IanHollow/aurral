@@ -1,7 +1,7 @@
 import { db } from "../../config/db-sqlite.js";
 import { downloadTracker } from "./downloadTracker.js";
 import { flowPlaylistConfig } from "../playlists/flowPlaylistConfig.js";
-import { beginDownloadAttempt, getActiveDownloadAttemptId, getPlaylistDownloadGeneration } from "./downloadCancellation.js";
+import { beginDownloadAttempt, getActiveDownloadAttemptId } from "./downloadCancellation.js";
 import { buildAurralTrackDestination } from "../downloadPaths.js";
 import { sanitizePathPart } from "../downloadUtils.js";
 
@@ -86,19 +86,6 @@ function recordTransfer(from, to, fromAttemptId, toAttemptId) {
     db.prepare("UPDATE _honker_live SET payload = ? WHERE id = ?").run(JSON.stringify(updated), row.id);
   }
   db.prepare("UPDATE weekly_flow_download_provider_work SET job_id = ?, playlist_id = ? WHERE job_id = ?").run(to.id, to.playlistId, from.id);
-}
-
-export function transferDownloadOwnershipInTransaction(jobId, targetPlaylistId) {
-  if (!db.inTransaction) throw new Error("Download ownership must change inside the membership transaction");
-  const from = currentJob(jobId);
-  if (!from) throw new Error("Download job is no longer available");
-  const fromAttemptId = getActiveDownloadAttemptId(jobId);
-  const toAttemptId = fromAttemptId || (from.status === "done" ? null : beginDownloadAttempt(jobId));
-  const generation = getPlaylistDownloadGeneration(targetPlaylistId);
-  db.prepare("UPDATE playlist_download_jobs SET playlist_id = ?, playlist_type = ?, playlist_generation = ? WHERE id = ?").run(targetPlaylistId, targetPlaylistId, generation, jobId);
-  const to = { ...from, playlistId: targetPlaylistId, playlistType: targetPlaylistId, playlistGeneration: generation };
-  recordTransfer(from, to, fromAttemptId, toAttemptId);
-  return { fromJobId: jobId, toJobId: jobId, dispatched: downloadTracker.isSlskdDispatched(jobId) };
 }
 
 export function replaceAlbumDownloadLeaderInTransaction(jobId, peerId) {

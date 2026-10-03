@@ -25,7 +25,7 @@ let stopping = false;
 let ownerCommandsInFlight = 0;
 let lastOwnerCommandAt = 0;
 const DOWNLOAD_OWNER_COMMANDS = new Set([
-  "start", "stop", "stopAndDrain", "wake", "researchMissingTracks",
+  "start", "stop", "stopAndDrain", "wake", "researchMissingJobs",
   "retryIncompletePlaylist", "setRetryCyclePaused", "updateWorkerSettings",
   "checkPlaylistComplete", "blockPlaylist", "unblockPlaylist",
   "waitForPlaylistIdle", "waitForIdle", "clearIncompleteRetry",
@@ -67,11 +67,8 @@ async function handleDownloadOwnerCommand(message) {
       result = true;
     } else if (method === "runQualityUpgradeChecks") {
       const { runQualityUpgradeCheck } = await import("./qualityProfileService.js");
-      const [playlistIds, limit = 500] = args;
-      result = 0;
-      for (const playlistId of playlistIds) {
-        result += await runQualityUpgradeCheck({ force: true, playlistId, limit });
-      }
+      const [jobIds, limit = 500] = args;
+      result = await runQualityUpgradeCheck({ force: true, jobIds, limit });
     } else if (method === "queueQualityUpgradeForJob") {
       const [{ queueQualityUpgrade }, { downloadTracker }] = await Promise.all([
         import("./qualityProfileService.js"),

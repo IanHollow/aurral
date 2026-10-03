@@ -8,6 +8,7 @@ import {
   setupIsolatedBackend,
   cleanupIsolatedState,
   createMockHttpServer,
+  importFromRepo,
   resetDatabase,
 } from "../helpers/backendTestHarness.js";
 
@@ -135,6 +136,11 @@ test.after(async () => {
 });
 
 test("pipeline completion leaves the library scan to playlist completion", async (t) => {
+  const { flowPlaylistConfig } = await importFromRepo("backend/services/playlists/flowPlaylistConfig.js");
+  const playlist = flowPlaylistConfig.createStaticPlaylist({
+    name: "Completed playlist",
+    tracks: [{ artistName: "Artist", trackName: "Track", canonicalJobId: "pipeline-job" }],
+  });
   const scheduleScanLibrary = t.mock.method(playlistManager, "scheduleScanLibrary", () => 1);
   const refreshPlaylist = t.mock.method(playlistManager, "refreshPlaylist", async () => null);
   const wake = t.mock.method(downloadWorker, "wake", () => {});
@@ -150,7 +156,7 @@ test("pipeline completion leaves the library scan to playlist completion", async
     },
     job: {
       id: "pipeline-job",
-      playlistType: "flow-playlist",
+      playlistType: "library",
       artistName: "Artist",
       trackName: "Track",
     },
@@ -158,11 +164,11 @@ test("pipeline completion leaves the library scan to playlist completion", async
   });
 
   assert.equal(scheduleScanLibrary.mock.callCount(), 0);
-  assert.deepEqual(refreshPlaylist.mock.calls.map((call) => call.arguments), [["flow-playlist"]]);
+  assert.deepEqual(refreshPlaylist.mock.calls.map((call) => call.arguments), [[playlist.id]]);
   assert.deepEqual(wake.mock.calls.map((call) => call.arguments), [[0]]);
   assert.deepEqual(
     checkPlaylistComplete.mock.calls.map((call) => call.arguments),
-    [["flow-playlist"]],
+    [["library"]],
   );
 });
 

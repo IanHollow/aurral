@@ -10,6 +10,7 @@ import {
   setupIsolatedBackend,
   startServerProcess,
 } from "../helpers/backendTestHarness.js";
+import { addStaticPlaylistJobs } from "../helpers/staticPlaylistJobs.js";
 
 const [isolatedState, { db }, { dbOps, userOps }, { hashPassword }, { indexLidarrLibrary }, { flowPlaylistConfig }, { downloadTracker }, { downloadWorker }, { updateStaticPlaylist }, { resolveArtworkUrl, createSubsonicPlaylist, star }, { warmImageProxy }, { playlistManager }] =
   await setupIsolatedBackend(
@@ -168,13 +169,13 @@ test.before(async () => {
       durationMs: 1000,
     }],
   });
-  const sharedJobId = downloadTracker.addJob({
+  const [sharedJobId] = addStaticPlaylistJobs({ downloadTracker, flowPlaylistConfig }, staticPlaylist.id, [{
     artistName: "Flow Artist",
     albumName: "Flow Album",
     albumMbid: "shared-album-mbid",
     trackName: "Flow Song",
     durationMs: 1000,
-  }, staticPlaylist.id);
+  }]);
   downloadTracker.setDone(sharedJobId, fixturePath);
   libraryFavoritePlaylist = flowPlaylistConfig.createStaticPlaylist({
     name: "Canonical Favorite Playlist",
@@ -186,7 +187,7 @@ test.before(async () => {
       durationMs: 10_000,
     }],
   });
-  libraryFavoriteJobId = downloadTracker.addJob({
+  [libraryFavoriteJobId] = addStaticPlaylistJobs({ downloadTracker, flowPlaylistConfig }, libraryFavoritePlaylist.id, [{
     artistName: "Canonical Artist",
     artistMbid: "11111111-1111-4111-8111-111111111111",
     albumName: "Canonical Album",
@@ -194,7 +195,7 @@ test.before(async () => {
     trackName: "Canonical Song",
     trackMbid: "55555555-5555-4555-8555-555555555555",
     durationMs: 10_000,
-  }, libraryFavoritePlaylist.id);
+  }]);
   downloadTracker.setDone(libraryFavoriteJobId, fixturePath, "Canonical Album");
   const syncedFavoriteTrack = {
     artistName: "Synced Favorite Artist",
@@ -222,7 +223,11 @@ test.before(async () => {
   );
   await mkdir(path.dirname(syncedFavoriteSourcePath), { recursive: true });
   await writeFile(syncedFavoriteSourcePath, "synced favorite");
-  syncedFavoriteSourceJobId = downloadTracker.addJob(syncedFavoriteTrack, syncedFavoritePlaylist.id);
+  [syncedFavoriteSourceJobId] = addStaticPlaylistJobs(
+    { downloadTracker, flowPlaylistConfig },
+    syncedFavoritePlaylist.id,
+    [syncedFavoriteTrack],
+  );
   downloadTracker.setDone(syncedFavoriteSourceJobId, syncedFavoriteSourcePath, syncedFavoriteTrack.albumName);
   const favoriteFlow = flowPlaylistConfig.createFlow({ name: "Favorite Toggle Flow", size: 1 });
   const favoritePath = path.join(fixtureRoot, "Favorite Artist", "Favorite Album", "Favorite Song.flac");
@@ -257,7 +262,7 @@ test.before(async () => {
 test.after(async () => {
   await aurral?.stop();
   if (syncedFavoritePlaylist) {
-    downloadTracker.clearByPlaylistType(syncedFavoritePlaylist.id);
+    downloadTracker.removeJob(syncedFavoriteSourceJobId);
     flowPlaylistConfig.deleteStaticPlaylist(syncedFavoritePlaylist.id);
   }
   await rm(syncedFavoriteSourcePath, { force: true }).catch(() => {});
@@ -520,16 +525,18 @@ test("exposes owned static playlists and keeps their entries playable", async ()
   assert.equal(artwork.response.status, 200);
   assert.equal(artwork.body, "shared-artwork");
 
-  const pendingJobId = downloadTracker.addJob({
+  const originalTracks = flowPlaylistConfig.getStaticPlaylist(staticPlaylist.id).tracks;
+  const [pendingJobId] = addStaticPlaylistJobs({ downloadTracker, flowPlaylistConfig }, staticPlaylist.id, [{
     artistName: "Pending Artist",
     albumName: "Pending Album",
     trackName: "Pending Song",
     durationMs: 1000,
-  }, staticPlaylist.id);
+  }]);
   try {
     const refreshed = responseJson(await request("getPlaylist", { id: shared.id })).playlist;
     assert.equal(refreshed.entry.some((entry) => entry.title === "Pending Song"), false);
   } finally {
+    flowPlaylistConfig.updateStaticPlaylist(staticPlaylist.id, { tracks: originalTracks });
     downloadTracker.removeJob(pendingJobId);
   }
 
@@ -658,14 +665,20 @@ test("creates durable Subsonic playlists around one promoted library job", async
 });
 
 test("failed Subsonic playlist creation rolls back its playlist and jobs", async () => {
-  const librarySong = responseJson(await request("search3", { query: "Canonical Song" })).searchResult3.song[0];
+  const flow = flowPlaylistConfig.getFlows().find((entry) => entry.name === "Favorite Toggle Flow");
+  const flowJob = downloadTracker.getByPlaylistType(flow.id)[0];
+  const songId = `flow-song:${encodeURIComponent(`${flow.id}:${flowJob.id}`)}`;
+  const libraryJob = () => db.prepare(
+    "SELECT id FROM playlist_download_jobs WHERE playlist_type = ? AND track_name = ? LIMIT 1",
+  ).get("library", flowJob.trackName);
+  assert.equal(libraryJob(), undefined);
   const user = userOps.getUserByUsername("alice");
   const originalUpdate = flowPlaylistConfig.updateStaticPlaylist;
   flowPlaylistConfig.updateStaticPlaylist = () => null;
   try {
-    assert.equal(
-      await createSubsonicPlaylist(user, { name: "Failed Subsonic Playlist", songIds: [librarySong.id] }),
-      null,
+    await assert.rejects(
+      createSubsonicPlaylist(user, { name: "Failed Subsonic Playlist", songIds: [songId] }),
+      /Could not save the playlist/,
     );
     assert.equal(
       flowPlaylistConfig.getStaticPlaylistsForUser(user).some(
@@ -673,12 +686,7 @@ test("failed Subsonic playlist creation rolls back its playlist and jobs", async
       ),
       false,
     );
-    assert.equal(
-      db.prepare(
-        "SELECT id FROM playlist_download_jobs WHERE playlist_type = ? AND track_name = ? LIMIT 1",
-      ).get("library", "Canonical Song"),
-      undefined,
-    );
+    assert.equal(libraryJob(), undefined);
   } finally {
     flowPlaylistConfig.updateStaticPlaylist = originalUpdate;
   }
@@ -792,7 +800,6 @@ test("favoriting a synced playlist track keeps it when the source removes it", a
     await stat(sourcePath);
   } finally {
     downloadWorker.start = originalStart;
-    downloadTracker.clearByPlaylistType(playlist.id);
     if (libraryJobId) downloadTracker.removeJob(libraryJobId);
     await rm(path.join(downloadRoot, track.artistName), { recursive: true, force: true });
     flowPlaylistConfig.deleteStaticPlaylist(playlist.id);

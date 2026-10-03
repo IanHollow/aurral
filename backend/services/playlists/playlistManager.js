@@ -124,6 +124,26 @@ export class PlaylistManager {
     return this._publishPlaylist(staticPlaylist, "Playlist");
   }
 
+  playlistIdsForJobs(jobs) {
+    const ids = new Set();
+    const staticPlaylists = flowPlaylistConfig.getStaticPlaylists();
+    for (const job of jobs) {
+      if (!job) continue;
+      const owner = job.playlistId || job.playlistType;
+      if (flowPlaylistConfig.getFlow(owner)) ids.add(owner);
+      for (const playlist of staticPlaylists) {
+        if (playlist.tracks.some((track) => track.canonicalJobId === job.id)) ids.add(playlist.id);
+      }
+    }
+    return [...ids];
+  }
+
+  async refreshPlaylistsForJobs(jobs) {
+    for (const playlistId of this.playlistIdsForJobs(jobs)) {
+      await this.refreshPlaylist(playlistId);
+    }
+  }
+
   scheduleScanLibrary(force = false) {
     return scheduleLibraryScan({ force, includeLidarr: false });
   }

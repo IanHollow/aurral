@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { setupIsolatedBackend, cleanupIsolatedState } from "../helpers/backendTestHarness.js";
+import { addStaticPlaylistJobs } from "../helpers/staticPlaylistJobs.js";
 
 const [state, { db }, { dbOps }, { flowPlaylistConfig }, { downloadTracker }, { getPlaylistStatusSnapshot }] =
   await setupIsolatedBackend(
@@ -33,7 +34,9 @@ function writeFromAnotherProcess(sql, parameters) {
 test("production snapshots refresh persisted membership and access changes without IPC", () => {
   dbOps.updateSettings({ integrations: {}, flows: [], sharedPlaylists: [] });
   const playlist = flowPlaylistConfig.createStaticPlaylist({ name: "Original", ownerUserId: 1 });
-  const jobId = downloadTracker.addJob({ artistName: "Artist", trackName: "Original track" }, playlist.id);
+  const [jobId] = addStaticPlaylistJobs({ downloadTracker, flowPlaylistConfig }, playlist.id, [
+    { artistName: "Artist", trackName: "Original track" },
+  ]);
   const previousMode = process.env.NODE_ENV;
   process.env.NODE_ENV = "development";
   try {
@@ -54,14 +57,15 @@ test("production snapshots refresh persisted membership and access changes witho
 
     const stored = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'sharedPlaylists'").get().value);
     stored[0].name = "Renamed elsewhere";
-    stored[0].tracks = [{ artistName: "Manual artist", trackName: "Manual track" }];
+    stored[0].tracks.push({ artistName: "Manual artist", trackName: "Manual track" });
     writeFromAnotherProcess("UPDATE settings SET value = ? WHERE key = ?", [JSON.stringify(stored), "sharedPlaylists"]);
     const renamed = read().sharedPlaylists[0];
     assert.equal(renamed.name, "Renamed elsewhere");
-    assert.equal(renamed.trackIdentities.length, 2);
+    assert.ok(renamed.trackIdentities.some((identity) => identity.includes("manual track")));
+    assert.equal(renamed.trackEntries.length, 1);
 
     writeFromAnotherProcess("DELETE FROM playlist_download_jobs WHERE id = ?", [jobId]);
-    assert.equal(read().sharedPlaylists[0].trackIdentities.length, 1);
+    assert.equal(read().sharedPlaylists[0].trackIdentities.some((identity) => identity.includes("changed track")), false);
     assert.deepEqual(read().sharedPlaylists[0].trackEntries, []);
 
     stored[0].ownerUserId = 2;

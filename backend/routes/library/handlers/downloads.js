@@ -472,6 +472,16 @@ export function registerDownloads(router) {
     }
 
     try {
+      const requestedJobs = downloadTracker.getAll().filter((job) => {
+        if (job.playlistType !== "library") return false;
+        if (track.trackMbid) return job.trackMbid === track.trackMbid;
+        return (
+          job.artistName?.toLocaleLowerCase() === track.artistName.toLocaleLowerCase() &&
+          job.trackName?.toLocaleLowerCase() === track.trackName.toLocaleLowerCase()
+        );
+      });
+      for (const job of requestedJobs) downloadTracker.setQueuedForPlaylist(job.id, false);
+
       const alreadyOwned = getLibraryTrackOwnership({
         trackMbid: track.trackMbid,
         artistName: track.artistName,
@@ -493,19 +503,7 @@ export function registerDownloads(router) {
         });
       }
 
-      const { downloadTracker } = await import(
-        "../../../services/downloadJobs/downloadTracker.js"
-      );
-      const existingJob = downloadTracker.getAll().find((job) => {
-        if (job.playlistType !== "library" || ["failed", "done"].includes(job.status)) {
-          return false;
-        }
-        if (track.trackMbid) return job.trackMbid === track.trackMbid;
-        return (
-          job.artistName?.toLocaleLowerCase() === track.artistName.toLocaleLowerCase() &&
-          job.trackName?.toLocaleLowerCase() === track.trackName.toLocaleLowerCase()
-        );
-      });
+      const existingJob = requestedJobs.find((job) => !["failed", "done"].includes(job.status));
       if (existingJob) {
         if (existingJob.status !== "done") {
           const { recordTrackJobQueued } = await import(

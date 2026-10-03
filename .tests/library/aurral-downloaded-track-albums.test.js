@@ -233,6 +233,33 @@ test("downloading a missing track of an unmonitored Aurral album monitors and qu
   assert.equal(albumState().album.monitored, false);
 });
 
+test("requesting a track a playlist queued keeps it when the playlist goes", async () => {
+  const jobId = downloadTracker.addJob(
+    { artistName: "Other Artist", trackName: "Playlist Song" },
+    "library",
+    { queuedForPlaylist: true },
+  );
+
+  const response = await callRoute("POST /downloads/track", {
+    artistName: "Other Artist",
+    trackName: "Playlist Song",
+  });
+
+  assert.equal(response.statusCode, 202);
+  assert.equal(response.body.jobId, jobId);
+  assert.equal(downloadTracker.getJob(jobId).queuedForPlaylist, false);
+});
+
+test("monitoring an album keeps the tracks a playlist queued for it", async () => {
+  const { albumId } = albumState();
+  const queued = downloadTracker.getAll().find((job) => job.albumMbid === albumMbid && job.trackMbid === trackMbids[2]);
+  downloadTracker.setQueuedForPlaylist(queued.id, true);
+
+  await libraryManager.setAurralAlbumMonitoring(albumId, { monitored: true });
+
+  assert.equal(downloadTracker.getJob(queued.id).queuedForPlaylist, false);
+});
+
 test("a file scanned into a Lidarr album stays Lidarr's", async () => {
   const lidarrAlbumMbid = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
   const artist = db.prepare("SELECT id FROM library_artists WHERE mbid = ?").get(artistMbid);

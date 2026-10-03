@@ -26,10 +26,10 @@ test.after(() => cleanupIsolatedState(state));
 function fixture(t, count = 3) {
   const user = userOps.createUser("bulk-user", "unused");
   const tracks = Array.from({ length: count }, (_, index) => ({ artistName: "Artist", trackName: `Track ${index}`, albumName: "Album" }));
-  const source = config.flowPlaylistConfig.createStaticPlaylist({ name: "Source", ownerUserId: user.id, tracks });
-  const jobs = tracks.map((track) => downloadTracker.getJob(downloadTracker.addJob(track, source.id)));
-  const selections = jobs.map((job, index) => ({ jobId: job.id, membershipId: source.tracks[index].membershipId,
-    jobPlaylistId: source.id, jobGeneration: job.playlistGeneration, jobCreatedAt: job.createdAt }));
+  const jobs = tracks.map((track) => downloadTracker.getJob(downloadTracker.addJob(track, "library", { queuedForPlaylist: true })));
+  const source = config.flowPlaylistConfig.createStaticPlaylist({ name: "Source", ownerUserId: user.id,
+    tracks: tracks.map((track, index) => ({ ...track, canonicalJobId: jobs[index].id })) });
+  const selections = jobs.map((job, index) => ({ jobId: job.id, membershipId: source.tracks[index].membershipId }));
   const refreshes = [];
   let scans = 0;
   t.mock.method(playlistManager, "refreshPlaylist", async (id) => { refreshes.push(id); });
@@ -49,19 +49,20 @@ test("a batch removes all selected memberships with one refresh and one scan", a
   assert.equal(result.outcomes.length, 100);
   assert.ok(result.outcomes.every((outcome) => outcome.status === "removed"));
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(f.source.id).tracks.length, 0);
-  assert.equal(downloadTracker.getByPlaylistId(f.source.id).length, 0);
+  assert.ok(f.jobs.every((job) => !downloadTracker.getJob(job.id)));
   assert.deepEqual(f.refreshes, [f.source.id]);
   assert.equal(f.scans(), 1);
 });
 
-test("a move preserves active backing jobs and never duplicates its destination on retry", async (t) => {
+test("a move keeps active backing jobs and never duplicates its destination on retry", async (t) => {
   const f = fixture(t);
   const result = await execute({ ownerUserId: f.user.id, sourcePlaylistId: f.source.id, action: "move", selections: f.selections,
     target: { playlistId: "preallocated-target", name: "Destination", create: true } });
   assert.ok(result.outcomes.every((outcome) => outcome.status === "moved"));
   const target = config.flowPlaylistConfig.getStaticPlaylist("preallocated-target");
   assert.equal(target.tracks.length, 3);
-  assert.ok(f.jobs.every((job) => downloadTracker.getJob(job.id)?.playlistType === target.id));
+  assert.ok(f.jobs.every((job) => downloadTracker.getJob(job.id)?.status === "pending" &&
+    target.tracks.some((track) => track.canonicalJobId === job.id)));
   await operations.processPlaylistOperation({ kind: "shared-playlist-bulk", operationId: result.operationId });
   assert.equal(config.flowPlaylistConfig.getStaticPlaylists().length, 2);
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(target.id).tracks.length, 3);
@@ -80,7 +81,7 @@ test("a removed and readded membership cannot be removed by a stale batch select
   assert.equal(f.scans(), 0);
 });
 
-test("failed destination persistence keeps source membership and owner", async (t) => {
+test("failed destination persistence keeps source membership and its job", async (t) => {
   const f = fixture(t, 1);
   const target = config.flowPlaylistConfig.createStaticPlaylist({ name: "Destination", ownerUserId: f.user.id });
   const { operationId } = store.enqueueBulkOperation({ ownerUserId: f.user.id, sourcePlaylistId: f.source.id, action: "move", selections: f.selections, target: { playlistId: target.id } });
@@ -89,7 +90,7 @@ test("failed destination persistence keeps source membership and owner", async (
     await assert.rejects(operations.processPlaylistOperation({ kind: "shared-playlist-bulk", operationId }), /fixture persistence failure/);
     assert.equal(config.flowPlaylistConfig.getStaticPlaylist(f.source.id).tracks.length, 1);
     assert.equal(config.flowPlaylistConfig.getStaticPlaylist(target.id).tracks.length, 0);
-    assert.equal(downloadTracker.getJob(f.jobs[0].id).playlistType, f.source.id);
+    assert.equal(downloadTracker.getJob(f.jobs[0].id).status, "pending");
   } finally { db.exec("DROP TRIGGER reject_membership"); }
 });
 
@@ -140,7 +141,7 @@ test("synchronization failure preserves applied outcomes and retries only unfini
 
 test("failed source commit leaves completed source media intact", async (t) => {
   const f = fixture(t, 1);
-  const file = path.join(process.env.DOWNLOAD_FOLDER, "aurral-weekly-flow", f.source.id, "Track.flac");
+  const file = path.join(process.env.DOWNLOAD_FOLDER, "Artist", "Album", "Track 0.flac");
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, "disposable audio");
   downloadTracker.setDone(f.jobs[0].id, file);
@@ -174,7 +175,7 @@ test("a restarted process resumes a destination already saved before source deta
   assert.equal(config.flowPlaylistConfig.getStaticPlaylists().length, 2);
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(target.id).tracks.length, 2);
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(f.source.id).tracks.length, 0);
-  assert.ok(f.jobs.every((job) => downloadTracker.getJob(job.id).playlistType === target.id));
+  assert.ok(f.jobs.every((job) => downloadTracker.getJob(job.id)?.playlistType === "library"));
 });
 
 test("partial provider failure preserves the failed membership and completes the other removals", async (t) => {
@@ -183,7 +184,8 @@ test("partial provider failure preserves the failed membership and completes the
   const client = getDownloadClient("deemix");
   t.mock.method(client, "isConfigured", () => true);
   t.mock.method(client, "removeFromQueue", async () => false);
-  honker.getPipelineQueue().enqueue({ jobId: f.jobs[0].id, playlistId: f.source.id, playlistGeneration: 0, phase: "poll", source: "deemix", queueUuid: "refused-provider-work" });
+  downloadTracker.setDownloading(f.jobs[0].id);
+  honker.getPipelineQueue().enqueue({ jobId: f.jobs[0].id, playlistId: "library", playlistGeneration: 0, phase: "poll", source: "deemix", queueUuid: "refused-provider-work" });
   const result = await execute({ ownerUserId: f.user.id, sourcePlaylistId: f.source.id, action: "remove", selections: f.selections });
   assert.deepEqual(result.outcomes.map((outcome) => outcome.status), ["failed", "removed"]);
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(f.source.id).tracks.length, 1);
@@ -194,11 +196,11 @@ test("partial provider failure preserves the failed membership and completes the
 
 test("bulk leader removal hands its album download to an unselected held peer", async (t) => {
   const f = fixture(t, 2);
-  db.prepare("UPDATE playlist_download_jobs SET request_group_id = ?, album_mbid = ? WHERE playlist_id = ?").run("disposable-album-group", "disposable-album", f.source.id);
+  db.prepare("UPDATE playlist_download_jobs SET request_group_id = ?, album_mbid = ? WHERE id IN (?, ?)").run("disposable-album-group", "disposable-album", f.jobs[0].id, f.jobs[1].id);
   downloadTracker.reconcileCommittedJobs();
   downloadTracker.setDownloading(f.jobs[1].id);
   downloadTracker.markSlskdDispatched(f.jobs[0].id);
-  honker.getPipelineQueue().enqueue({ jobId: f.jobs[0].id, playlistId: f.source.id, playlistGeneration: 0, phase: "poll", source: "deemix",
+  honker.getPipelineQueue().enqueue({ jobId: f.jobs[0].id, playlistId: "library", playlistGeneration: 0, phase: "poll", source: "deemix",
     queueUuid: "album-work-needed-by-peer", albumGrab: true, albumGroupJobIds: f.jobs.map((job) => job.id) });
   const result = await execute({ ownerUserId: f.user.id, sourcePlaylistId: f.source.id, action: "remove", selections: [f.selections[0]] });
   assert.equal(result.outcomes[0].status, "removed");
@@ -212,6 +214,7 @@ test("bulk leader removal hands its album download to an unselected held peer", 
 
 test("a failed source commit after provider cleanup leaves a recoverable active job", async (t) => {
   const f = fixture(t, 1);
+  downloadTracker.setDownloading(f.jobs[0].id);
   const { isDownloadJobCancelled } = await import("../../backend/services/downloadJobs/downloadCancellation.js");
   const { operationId } = store.enqueueBulkOperation({ ownerUserId: f.user.id, sourcePlaylistId: f.source.id, action: "remove", selections: f.selections });
   db.exec("CREATE TRIGGER reject_pending_commit BEFORE INSERT ON settings WHEN NEW.key = 'sharedPlaylists' BEGIN SELECT RAISE(ABORT, 'fixture pending failure'); END");
@@ -239,7 +242,7 @@ test("failed provider cleanup leaves a retained quality upgrade recoverable", as
   const client = getDownloadClient("deemix");
   t.mock.method(client, "isConfigured", () => true);
   t.mock.method(client, "removeFromQueue", async () => false);
-  honker.getPipelineQueue().enqueue({ jobId: upgradeId, playlistId: f.source.id, playlistGeneration: 0,
+  honker.getPipelineQueue().enqueue({ jobId: upgradeId, playlistId: "library", playlistGeneration: 0,
     phase: "poll", source: "deemix", queueUuid: "refused-upgrade-work" });
   const result = await execute({ ownerUserId: f.user.id, sourcePlaylistId: f.source.id, action: "remove", selections: f.selections });
   assert.equal(result.outcomes[0].status, "failed");
@@ -267,17 +270,18 @@ test("duplicate supplied membership IDs cannot detach an unselected track", asyn
 
 test("a conflicting destination membership keeps the source job while other tracks move", async (t) => {
   const f = fixture(t, 2);
-  const target = config.flowPlaylistConfig.createStaticPlaylist({ name: "Existing target", ownerUserId: f.user.id, tracks: [f.source.tracks[0]] });
+  const separateJobId = downloadTracker.addJob(f.source.tracks[0], "library");
+  const target = config.flowPlaylistConfig.createStaticPlaylist({ name: "Existing target", ownerUserId: f.user.id,
+    tracks: [{ ...f.source.tracks[0], canonicalJobId: separateJobId }] });
   const result = await execute({ ownerUserId: f.user.id, sourcePlaylistId: f.source.id, action: "move", target: { playlistId: target.id }, selections: f.selections });
   assert.deepEqual(result.outcomes.map((outcome) => outcome.status), ["failed", "moved"]);
   const source = config.flowPlaylistConfig.getStaticPlaylist(f.source.id);
   assert.equal(source.tracks.length, 1);
-  assert.equal(downloadTracker.getJob(f.jobs[0].id).playlistType, source.id);
-  assert.equal(downloadTracker.getJob(f.jobs[1].id).playlistType, target.id);
+  assert.equal(source.tracks[0].canonicalJobId, f.jobs[0].id);
   const destination = config.flowPlaylistConfig.getStaticPlaylist(target.id);
-  assert.equal(destination.tracks.length, 2);
-  assert.equal(destination.tracks[0].canonicalJobId, undefined);
-  assert.equal(destination.tracks[1].canonicalJobId, f.jobs[1].id);
+  assert.deepEqual(destination.tracks.map((track) => track.canonicalJobId), [separateJobId, f.jobs[1].id]);
+  assert.ok(downloadTracker.getJob(f.jobs[0].id));
+  assert.ok(downloadTracker.getJob(f.jobs[1].id));
 });
 
 test("a new-target move with only stale selections creates no empty playlist", async (t) => {

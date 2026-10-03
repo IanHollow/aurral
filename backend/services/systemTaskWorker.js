@@ -42,7 +42,6 @@ export async function processSystemTask(payload = {}, job = null, context = {}) 
       const { runQualityUpgradeCheck } = await import("./qualityProfileService.js");
       await runQualityUpgradeCheck({
         force: payload.force === true,
-        playlistId: payload.playlistId || null,
         limit: payload.limit,
       });
       return;

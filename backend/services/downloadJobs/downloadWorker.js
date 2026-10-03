@@ -540,12 +540,7 @@ export class DownloadWorker {
       return 0;
     }
     const flow = flowPlaylistConfig.getFlow(playlistType);
-    const staticPlaylist = flowPlaylistConfig.getStaticPlaylist(playlistType);
-    if (!flow && !staticPlaylist) {
-      this.clearIncompleteRetry(playlistType);
-      return 0;
-    }
-    if (flow && flow.enabled !== true) {
+    if (!flow || flow.enabled !== true) {
       this.clearIncompleteRetry(playlistType);
       return 0;
     }
@@ -563,8 +558,8 @@ export class DownloadWorker {
     return 0;
   }
 
-  async researchMissingTracks(playlistType) {
-    const jobs = downloadTracker.getByPlaylistType(playlistType);
+  async researchMissingJobs(jobIds) {
+    const jobs = jobIds.map((id) => downloadTracker.getJob(id)).filter(Boolean);
     const isUnmonitored = indexUnmonitoredJobs();
     let requeued = 0;
     for (const job of jobs) {
@@ -583,8 +578,7 @@ export class DownloadWorker {
       }
       return requeued;
     }
-    const stats = downloadTracker.getPlaylistTypeStats(playlistType);
-    if (stats.pending > 0) {
+    if (jobs.some((job) => job.status === "pending")) {
       if (this.running) {
         this.wake();
       } else {
@@ -1031,7 +1025,7 @@ function createRemoteDownloadWorker() {
     stop: () => notify("stop"),
     stopAndDrain: () => call("stopAndDrain", [], 30 * 60 * 1000),
     wake: (delayMs = 0) => notify("wakeOrStart", [delayMs]),
-    researchMissingTracks: (id) => call("researchMissingTracks", [id], 10 * 60 * 1000),
+    researchMissingJobs: (jobIds) => call("researchMissingJobs", [jobIds], 10 * 60 * 1000),
     retryIncompletePlaylist: (id) => call("retryIncompletePlaylist", [id], 10 * 60 * 1000),
     setRetryCyclePaused: async (id, paused) => {
       const result = await call("setRetryCyclePaused", [id, paused]);

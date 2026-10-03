@@ -179,7 +179,8 @@ export function createSchema(db) {
       quality_upgrade_checked_at INTEGER,
       upgrade_for_job_id TEXT,
       manual_replacement_search INTEGER NOT NULL DEFAULT 0,
-      album_grab_attempted INTEGER NOT NULL DEFAULT 0
+      album_grab_attempted INTEGER NOT NULL DEFAULT 0,
+      queued_for_playlist INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS playlist_download_jobs_revision (

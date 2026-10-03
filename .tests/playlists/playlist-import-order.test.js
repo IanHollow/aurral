@@ -9,6 +9,7 @@ import {
   importFromRepo,
   resetDatabase,
 } from "../helpers/backendTestHarness.js";
+import { addStaticPlaylistJobs } from "../helpers/staticPlaylistJobs.js";
 
 const [
   isolatedState,
@@ -53,7 +54,6 @@ const {
   flowPlaylistConfig,
   invalidateFlowPlaylistConfigCache,
   orderJobsByPlaylistTracks,
-  rebuildStaticPlaylistTracksFromJobs,
 } = playlistConfigModule;
 const {
   appendStaticPlaylistTracks,
@@ -74,6 +74,10 @@ const { playlistOperationQueue } = operationQueueModule;
 const { logger } = loggerModule;
 
 const downloadRoot = process.env.DOWNLOAD_FOLDER;
+const { getStaticPlaylistJobs } = await importFromRepo("backend/services/playlists/staticPlaylistJobs.js");
+const playlistJobs = (playlistId) => getStaticPlaylistJobs(flowPlaylistConfig.getStaticPlaylist(playlistId));
+const addPlaylistJob = (playlistId, track) =>
+  addStaticPlaylistJobs({ downloadTracker, flowPlaylistConfig }, playlistId, [track])[0];
 
 test("import sync delegates to the flow owner without blocking the web event loop", async () => {
   const { configureDownloadOwnerClient } = await importFromRepo(
@@ -497,25 +501,6 @@ test("orderJobsByPlaylistTracks follows config order over createdAt", () => {
   );
 });
 
-test("rebuildStaticPlaylistTracksFromJobs keeps remaining config order", () => {
-  const tracks = [
-    { artistName: "A", trackName: "One", albumName: "Album" },
-    { artistName: "B", trackName: "Two", albumName: "Album" },
-    { artistName: "C", trackName: "Three", albumName: "Album" },
-    { artistName: "D", trackName: "Four", albumName: "Album" },
-  ];
-  const jobs = [
-    { id: 10, createdAt: 40, ...tracks[3] },
-    { id: 11, createdAt: 10, ...tracks[0] },
-    { id: 12, createdAt: 30, ...tracks[2] },
-  ];
-  const remaining = rebuildStaticPlaylistTracksFromJobs(tracks, jobs);
-  assert.deepEqual(
-    remaining.map((track) => track.trackName),
-    ["One", "Three", "Four"],
-  );
-});
-
 test("mixed reuse seeding keeps import job order", async () => {
   const originalStart = downloadWorker.start;
   downloadWorker.start = async () => false;
@@ -556,10 +541,7 @@ test("mixed reuse seeding keeps import job order", async () => {
     assert.equal(result.tracksReused, 2);
     assert.equal(result.tracksQueued, 2);
 
-    const jobs = orderJobsByPlaylistTracks(
-      downloadTracker.getByPlaylistType(playlist.id),
-      flowPlaylistConfig.getStaticPlaylist(playlist.id).tracks,
-    );
+    const jobs = playlistJobs(playlist.id);
     assert.deepEqual(
       jobs.map((job) => `${job.artistName}:${job.trackName}:${job.status}`),
       [
@@ -856,10 +838,7 @@ test("deleting a track keeps remaining import order in config", async () => {
       tracks,
     });
 
-    const jobsBefore = orderJobsByPlaylistTracks(
-      downloadTracker.getByPlaylistType(playlist.id),
-      flowPlaylistConfig.getStaticPlaylist(playlist.id).tracks,
-    );
+    const jobsBefore = playlistJobs(playlist.id);
     const removedJobId = jobsBefore[1].id;
 
     const deleted = await processPlaylistOperation({
@@ -875,10 +854,7 @@ test("deleting a track keeps remaining import order in config", async () => {
       ["One", "Three", "Four"],
     );
 
-    const jobsAfter = orderJobsByPlaylistTracks(
-      downloadTracker.getByPlaylistType(playlist.id),
-      updated.tracks,
-    );
+    const jobsAfter = playlistJobs(playlist.id);
     assert.deepEqual(
       jobsAfter.map((job) => job.trackName),
       ["One", "Three", "Four"],
@@ -911,7 +887,7 @@ test("replacing a static playlist removes Spotify tracks and honors file retenti
     await fs.mkdir(downloadRoot, { recursive: true });
     const keepPath = path.join(downloadRoot, "keep-removed.flac");
     await fs.writeFile(keepPath, "audio");
-    const keepJobId = downloadTracker.addJob(track, keepPlaylist.id);
+    const keepJobId = addPlaylistJob(keepPlaylist.id, track);
     downloadTracker.setDone(keepJobId, keepPath, track.albumName);
 
     await updateStaticPlaylist({
@@ -937,7 +913,7 @@ test("replacing a static playlist removes Spotify tracks and honors file retenti
     });
     const deletePath = path.join(downloadRoot, "delete-removed.flac");
     await fs.writeFile(deletePath, "audio");
-    const deleteJobId = downloadTracker.addJob(track, deletePlaylist.id);
+    const deleteJobId = addPlaylistJob(deletePlaylist.id, track);
     downloadTracker.setDone(deleteJobId, deletePath, track.albumName);
 
     await updateStaticPlaylist({
@@ -974,7 +950,7 @@ test("renaming or changing sync settings leaves queued downloads alone", async (
     },
   });
   const [doneId, queuedId, heldId, failedId] = tracks.map((track) =>
-    downloadTracker.addJob(track, playlist.id),
+    addPlaylistJob(playlist.id, track),
   );
   downloadTracker.setDone(doneId, path.join(downloadRoot, "done.flac"), "Album");
   downloadTracker.setBlocked(heldId, "Held for review");
@@ -998,7 +974,7 @@ test("renaming or changing sync settings leaves queued downloads alone", async (
   assert.equal(updated.tracks.length, 4);
   assert.deepEqual(
     Object.fromEntries(
-      downloadTracker.getByPlaylistType(playlist.id).map((job) => [job.id, job.status]),
+      playlistJobs(playlist.id).map((job) => [job.id, job.status]),
     ),
     {
       [doneId]: "done",
@@ -1034,14 +1010,14 @@ test("imported playlist sync preserves enriched jobs while replacing removed tra
         syncIntervalHours: 24,
       },
     });
-    const pendingJobId = downloadTracker.addJob(pending, playlist.id);
-    const completedJobId = downloadTracker.addJob(completed, playlist.id);
+    const pendingJobId = addPlaylistJob(playlist.id, pending);
+    const completedJobId = addPlaylistJob(playlist.id, completed);
     await fs.mkdir(downloadRoot, { recursive: true });
     const completedPath = path.join(downloadRoot, "imported-retained-completed.flac");
     await fs.writeFile(completedPath, "audio");
     downloadTracker.setDone(completedJobId, completedPath, completed.albumName);
-    const removedJobId = downloadTracker.addJob(removed, playlist.id);
-    const retitledJobId = downloadTracker.addJob(retitled, playlist.id);
+    const removedJobId = addPlaylistJob(playlist.id, removed);
+    const retitledJobId = addPlaylistJob(playlist.id, retitled);
     downloadTracker.updateMetadata(retitledJobId, { albumName: "Album (Deluxe Edition)" });
     downloadTracker.setDone(retitledJobId, completedPath, "Album (Deluxe Edition)");
 
@@ -1063,7 +1039,7 @@ test("imported playlist sync preserves enriched jobs while replacing removed tra
     assert.equal(downloadTracker.getJob(completedJobId)?.status, "done");
     await fs.access(completedPath);
     assert.equal(downloadTracker.getJob(removedJobId), null);
-    assert.ok(downloadTracker.getByPlaylistType(playlist.id).some((job) => job.trackName === "New"));
+    assert.ok(playlistJobs(playlist.id).some((job) => job.trackName === "New"));
   } finally {
     downloadWorker.start = originalStart;
     downloadWorker.stop();
@@ -1102,7 +1078,8 @@ test("ListenBrainz sync uses the shared import update path", async (t) => {
     const syncedTracks = flowPlaylistConfig.getStaticPlaylist(playlist.id).tracks;
     assert.ok(syncedTracks[0].membershipId);
     assert.notEqual(syncedTracks[0].membershipId, playlist.tracks[0].membershipId);
-    assert.deepEqual(syncedTracks.map(({ membershipId: _membershipId, ...track }) => track), [
+    assert.equal(downloadTracker.getJob(syncedTracks[0].canonicalJobId)?.status, "pending");
+    assert.deepEqual(syncedTracks.map(({ membershipId: _membershipId, canonicalJobId: _jobId, ...track }) => track), [
       {
         artistName: "New Artist",
         trackName: "New Song",
@@ -1388,7 +1365,7 @@ test("Spotify sync keeps a retention change made while Spotify is pending", asyn
     await fs.mkdir(downloadRoot, { recursive: true });
     const finalPath = path.join(downloadRoot, "pending-retention.flac");
     await fs.writeFile(finalPath, "audio");
-    const jobId = downloadTracker.addJob(track, playlist.id);
+    const jobId = addPlaylistJob(playlist.id, track);
     downloadTracker.setDone(jobId, finalPath, track.albumName);
 
     let resolveSpotifyTracks;
@@ -1457,7 +1434,7 @@ test("Spotify cleanup serializes retention updates with file removal", async () 
     await fs.mkdir(downloadRoot, { recursive: true });
     const finalPath = path.join(downloadRoot, "serialized-retention.flac");
     await fs.writeFile(finalPath, "audio");
-    const jobId = downloadTracker.addJob(track, playlist.id);
+    const jobId = addPlaylistJob(playlist.id, track);
     downloadTracker.setDone(jobId, finalPath, track.albumName);
 
     spotifyClient.listPlaylistTracks = async () => [];

@@ -125,6 +125,52 @@ test("the stored single password is removed", () => {
   }
 });
 
+test("static playlist jobs move into the Library and their tracks reference them", () => {
+  const { db } = upgrade("stamped");
+  try {
+    const jobs = Object.fromEntries(db.prepare(`
+      SELECT track_name, playlist_id, playlist_type, queued_for_playlist, status
+      FROM playlist_download_jobs WHERE upgrade_for_job_id IS NULL
+    `).all().map((job) => [`${job.track_name}:${job.playlist_id === "library" ? "library" : "flow"}`, job]));
+    const owners = (name) => db.prepare("SELECT playlist_id FROM playlist_download_jobs WHERE track_name = ? AND upgrade_for_job_id IS NULL").pluck().all(name);
+    assert.deepEqual(owners("Downloaded"), ["library"]);
+    assert.equal(jobs["Downloaded:library"].queued_for_playlist, 1);
+    assert.equal(jobs["Queued:library"].queued_for_playlist, 1);
+    assert.equal(jobs["Failed:library"].queued_for_playlist, 1);
+    assert.equal(jobs["Only In Jobs:library"].queued_for_playlist, 1);
+    assert.deepEqual(
+      db.prepare("SELECT queued_for_playlist FROM playlist_download_jobs WHERE track_name = 'Library Done' ORDER BY queued_for_playlist").pluck().all(),
+      [0, 0],
+    );
+    assert.equal(jobs["Flow Done:flow"].queued_for_playlist, 0);
+    assert.deepEqual(owners("Gone Pending"), []);
+    assert.deepEqual(owners("Gone Done"), ["library"]);
+
+    const upgradeJob = db.prepare("SELECT playlist_id, playlist_type, queued_for_playlist FROM playlist_download_jobs WHERE upgrade_for_job_id IS NOT NULL").get();
+    assert.deepEqual(upgradeJob, { playlist_id: "library", playlist_type: "quality-upgrade", queued_for_playlist: 0 });
+
+    const playlists = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'sharedPlaylists'").pluck().get());
+    const imported = playlists.find((playlist) => playlist.name === "Imported");
+    const jobIdFor = (name) => db.prepare("SELECT id FROM playlist_download_jobs WHERE track_name = ? AND upgrade_for_job_id IS NULL AND queued_for_playlist = 1").pluck().get(name);
+    assert.deepEqual(
+      imported.tracks.map((track) => [track.trackName, Boolean(track.canonicalJobId)]),
+      [["Downloaded", true], ["Queued", true], ["Failed", true], ["Library Done", true], ["Only In Jobs", true]],
+    );
+    assert.equal(imported.tracks[0].canonicalJobId, jobIdFor("Downloaded"));
+    assert.equal(new Set(imported.tracks.map((track) => track.membershipId)).size, 5);
+    const copied = playlists.find((playlist) => playlist.name === "Copied");
+    assert.equal(copied.tracks[0].canonicalJobId, jobIdFor("Downloaded"));
+
+    const pipeline = db.prepare("SELECT payload FROM _honker_live WHERE queue = 'slskd-pipeline'").pluck().all().map((payload) => JSON.parse(payload));
+    assert.deepEqual(pipeline.map((payload) => [payload.jobId, payload.playlistId]), [[jobIdFor("Queued"), "library"]]);
+    assert.deepEqual(db.prepare("SELECT job_id, playlist_id FROM weekly_flow_download_provider_work").all(), [{ job_id: jobIdFor("Queued"), playlist_id: "library" }]);
+    const flowId = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'flows'").pluck().get())[0].id;
+    assert.deepEqual(db.prepare("SELECT playlist_id FROM weekly_flow_download_cancellations ORDER BY playlist_id").pluck().all(), [flowId]);
+  } finally {
+    db.close();
+  }
+});
+
 test("covers cached from the old cover host are cleared", () => {
   const { db } = upgrade("stamped");
   try {
