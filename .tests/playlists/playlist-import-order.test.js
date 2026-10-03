@@ -209,7 +209,7 @@ test.beforeEach(async () => {
     integrations: {},
     onboardingComplete: true,
     flows: [],
-    sharedPlaylists: [],
+    staticPlaylists: [],
     playlistWorker: { existingFileMode: "reuse", concurrency: 1 },
     playlistArtwork: { style: "aurral" },
   });
@@ -812,8 +812,8 @@ test("download pipeline work is deferred while its playlist owner is suspended",
 test("flow operation tokens are stored separately for each playlist", () => {
   markLatestPlaylistOperationToken("flow:one", "first");
   markLatestPlaylistOperationToken("flow:two", "second");
-  assert.equal(dbOps.getJSONSetting("weeklyFlowOperationTokens:flow%3Aone"), "first");
-  assert.equal(dbOps.getJSONSetting("weeklyFlowOperationTokens:flow%3Atwo"), "second");
+  assert.equal(dbOps.getJSONSetting("playlistOperationTokens:flow%3Aone"), "first");
+  assert.equal(dbOps.getJSONSetting("playlistOperationTokens:flow%3Atwo"), "second");
 });
 
 test("deleting a track keeps remaining import order in config", async () => {
@@ -842,7 +842,7 @@ test("deleting a track keeps remaining import order in config", async () => {
     const removedJobId = jobsBefore[1].id;
 
     const deleted = await processPlaylistOperation({
-      kind: "shared-playlist-delete-track",
+      kind: "static-playlist-delete-track",
       playlistId: playlist.id,
       jobId: removedJobId,
     });
@@ -957,7 +957,7 @@ test("renaming or changing sync settings leaves queued downloads alone", async (
   downloadTracker.setFailed(failedId, "No source");
 
   await processPlaylistOperation({
-    kind: "shared-playlist-update",
+    kind: "static-playlist-update",
     playlistId: playlist.id,
     name: "Renamed",
     tracks: playlist.tracks,
@@ -1078,8 +1078,8 @@ test("ListenBrainz sync uses the shared import update path", async (t) => {
     const syncedTracks = flowPlaylistConfig.getStaticPlaylist(playlist.id).tracks;
     assert.ok(syncedTracks[0].membershipId);
     assert.notEqual(syncedTracks[0].membershipId, playlist.tracks[0].membershipId);
-    assert.equal(downloadTracker.getJob(syncedTracks[0].canonicalJobId)?.status, "pending");
-    assert.deepEqual(syncedTracks.map(({ membershipId: _membershipId, canonicalJobId: _jobId, ...track }) => track), [
+    assert.equal(downloadTracker.getJob(syncedTracks[0].jobId)?.status, "pending");
+    assert.deepEqual(syncedTracks.map(({ membershipId: _membershipId, jobId: _jobId, ...track }) => track), [
       {
         artistName: "New Artist",
         trackName: "New Song",

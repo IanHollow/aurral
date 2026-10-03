@@ -10,7 +10,7 @@ import { cleanExpiredSessions } from "../config/session-helpers.js";
 export async function processSystemTask(payload = {}, job = null, context = {}) {
   const kind = String(payload?.kind || "").trim();
   switch (kind) {
-    case "weekly-flow-refresh": {
+    case "flow-refresh": {
       const { runScheduledFlowRefresh } = await import("./flows/flowScheduler.js");
       await runScheduledFlowRefresh();
       return;
@@ -33,7 +33,7 @@ export async function processSystemTask(payload = {}, job = null, context = {}) 
     case "session-cleanup":
       cleanExpiredSessions();
       return;
-    case "weekly-flow-reuse-repair": {
+    case "file-reuse-repair": {
       const { downloadWorker } = await import("./downloadJobs/downloadWorker.js");
       downloadWorker.scheduleReuseLinkRepair(false);
       return;
@@ -53,7 +53,7 @@ export async function processSystemTask(payload = {}, job = null, context = {}) 
       await reclassifyQualityJobs({ enqueue: getQualityProfile().automaticUpgrades });
       return;
     }
-    case "weekly-flow-startup-reuse-repair": {
+    case "startup-file-reuse-repair": {
       const { downloadWorker } = await import("./downloadJobs/downloadWorker.js");
       downloadWorker.scheduleReuseLinkRepair(true);
       return;
@@ -87,7 +87,7 @@ export async function processSystemTask(payload = {}, job = null, context = {}) 
       if (!hasCompletedLibraryScan()) scheduleLibraryScan();
       return;
     }
-    case "weekly-flow-startup-check": {
+    case "flow-startup-check": {
       const { startWorkerIfPending } = await import("./downloadJobs/downloadWorker.js");
       await startWorkerIfPending();
       return;

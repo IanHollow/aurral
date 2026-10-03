@@ -41,7 +41,7 @@ function Sidebar({ mode, width = 208, settingsMode = false }) {
   const stageBackdropVariant = showStageBackdrop
     ? resolveSidebarStageBackdropVariant()
     : null;
-  const hasFlowAccess = user?.role === "admin" || !!user?.permissions?.accessFlow;
+  const hasFlowAccess = user?.role === "admin" || !!user?.permissions?.accessPlaylists;
   const canAccessSettings = user?.role === "admin" || !!user?.permissions?.accessSettings;
   const { hasReview: hasReviewAlert } = useDownloadWorkerActivity({
     enabled: hasFlowAccess,
@@ -208,7 +208,7 @@ function Sidebar({ mode, width = 208, settingsMode = false }) {
         path: "/flows",
         label: "Flows",
         icon: AudioWaveform,
-        permission: "accessFlow",
+        permission: "accessPlaylists",
       },
       {
         path: buildActivityPath(DEFAULT_ACTIVITY_VIEW),
@@ -224,7 +224,7 @@ function Sidebar({ mode, width = 208, settingsMode = false }) {
         icon: AlertTriangle,
         section: "wanted",
         subnav: WANTED_VIEWS,
-        permission: "accessFlow",
+        permission: "accessPlaylists",
       },
       { path: "/blocklist", label: "Blocklist", icon: Ban },
     ];

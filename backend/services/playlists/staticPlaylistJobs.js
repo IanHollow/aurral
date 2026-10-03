@@ -26,7 +26,7 @@ const ACTIVE_STATUSES = ["pending", "downloading", "blocked"];
 const REMOVED_MEDIA_PREFIX = "playlistRemovedMedia:";
 
 export function getStaticPlaylistJobIds(playlist) {
-  return [...new Set((playlist?.tracks || []).map((track) => track?.canonicalJobId).filter(Boolean))];
+  return [...new Set((playlist?.tracks || []).map((track) => track?.jobId).filter(Boolean))];
 }
 
 export function getStaticPlaylistJobs(playlist) {
@@ -36,23 +36,23 @@ export function getStaticPlaylistJobs(playlist) {
 
 export function getStaticPlaylistsReferencingJob(jobId, excludedPlaylistId = null) {
   return flowPlaylistConfig.getStaticPlaylists().filter((playlist) =>
-    playlist.id !== excludedPlaylistId && playlist.tracks.some((track) => track.canonicalJobId === jobId));
+    playlist.id !== excludedPlaylistId && playlist.tracks.some((track) => track.jobId === jobId));
 }
 
 export function staticPlaylistReferencesJob(playlist, jobId) {
-  return Boolean(playlist?.tracks?.some((track) => track.canonicalJobId === jobId));
+  return Boolean(playlist?.tracks?.some((track) => track.jobId === jobId));
 }
 
 export function captureStaticPlaylistSelection(playlist, jobId) {
   const job = downloadTracker.getJob(jobId);
-  const track = playlist?.tracks?.find((entry) => entry.canonicalJobId === jobId);
+  const track = playlist?.tracks?.find((entry) => entry.jobId === jobId);
   if (!job || job.upgradeForJobId || !track) return null;
   return { jobId, membershipId: track.membershipId || null };
 }
 
 export function isStaticPlaylistSelectionCurrent(selection, playlist) {
   return Boolean(playlist?.tracks?.some((track) =>
-    track.canonicalJobId === selection.jobId &&
+    track.jobId === selection.jobId &&
     (!selection.membershipId || track.membershipId === selection.membershipId)));
 }
 
@@ -112,20 +112,20 @@ export async function linkStaticPlaylistTracks(tracks) {
   let tracksQueued = 0;
   let tracksReused = 0;
   for (const track of tracks) {
-    const current = track.canonicalJobId ? downloadTracker.getJob(track.canonicalJobId) : null;
+    const current = track.jobId ? downloadTracker.getJob(track.jobId) : null;
     if (current && tracksShareMembership(current, track)) {
       linked.push(track);
       continue;
     }
     const link = await linkTrack(track, { existingFileMode, downloadRoot: downloadWorker.downloadRoot });
     if (!link) {
-      linked.push({ ...track, canonicalJobId: undefined });
+      linked.push({ ...track, jobId: undefined });
       continue;
     }
     if (link.created) createdJobIds.push(link.jobId);
     if (link.queued) tracksQueued += 1;
     if (link.reused) tracksReused += 1;
-    linked.push({ ...track, canonicalJobId: link.jobId });
+    linked.push({ ...track, jobId: link.jobId });
   }
   return { tracks: linked, createdJobIds, tracksQueued, tracksReused };
 }
@@ -183,7 +183,7 @@ export async function commitStaticPlaylistTracks({
 }) {
   const playlist = flowPlaylistConfig.getStaticPlaylist(playlistId);
   if (!playlist) throw new Error("Playlist no longer exists");
-  const keptJobIds = new Set(tracks.map((track) => track.canonicalJobId).filter(Boolean));
+  const keptJobIds = new Set(tracks.map((track) => track.jobId).filter(Boolean));
   const releasingIds = new Set(getStaticPlaylistJobIds(playlist).filter((id) => !keptJobIds.has(id)));
   const plans = [];
   const outcomes = [];
@@ -219,7 +219,7 @@ export async function commitStaticPlaylistTracks({
   }
   const finalTracks = [
     ...tracks,
-    ...playlist.tracks.filter((track) => failedJobIds.has(track.canonicalJobId)),
+    ...playlist.tracks.filter((track) => failedJobIds.has(track.jobId)),
   ];
   const redirects = [];
   try {

@@ -168,7 +168,7 @@ test("Subsonic edits wait for an in-flight import before deleting a removed song
     await commit.lock;
     const updated = await update;
     assert.equal(updated?.name, "Subsonic Edit Complete");
-    assert.deepEqual(updated.tracks.map((track) => track.canonicalJobId), [keptJobId]);
+    assert.deepEqual(updated.tracks.map((track) => track.jobId), [keptJobId]);
   } finally {
     commit.release();
     await commit.lock;
@@ -189,7 +189,7 @@ test("renaming a Subsonic playlist keeps its downloads", async () => {
 
   const renamed = await subsonic.updateSubsonicPlaylist(user, { playlistId, name: "After Rename" });
 
-  assert.equal(renamed?.tracks[0]?.canonicalJobId, jobId);
+  assert.equal(renamed?.tracks[0]?.jobId, jobId);
   assert.equal(downloadTracker.getJob(jobId)?.status, "done");
   await fs.access(finalPath);
 });
@@ -219,7 +219,7 @@ test("Subsonic deletion keeps a song copied into another playlist", async () => 
     name: "Copy target",
     songIds: [`shared-song:subsonic-copy-source:${jobId}`],
   });
-  assert.equal(copy?.tracks[0]?.canonicalJobId, jobId);
+  assert.equal(copy?.tracks[0]?.jobId, jobId);
 
   assert.equal(await subsonic.deleteSubsonicPlaylist(user, "subsonic-copy-source"), true);
   assert.equal(downloadTracker.getJob(jobId)?.finalPath, finalPath);
@@ -252,7 +252,7 @@ test("Subsonic deletion retains its download and provider work when cancellation
 
   assert.equal(downloadTracker.getJob(jobId)?.status, "failed");
   assert.equal(isDownloadJobCancelled(jobId), false);
-  assert.equal(flowPlaylistConfig.getStaticPlaylist(playlistId)?.tracks[0]?.canonicalJobId, jobId);
+  assert.equal(flowPlaylistConfig.getStaticPlaylist(playlistId)?.tracks[0]?.jobId, jobId);
   assert.equal(listDownloadProviderWork({ jobIds: [jobId], provider: "slskd-search" }).length, 1);
 });
 
@@ -284,7 +284,7 @@ test("a failed Subsonic edit keeps the old playlist and leaves its downloads rec
     await assert.rejects(edit(), /Could not cancel download provider work/);
     const kept = flowPlaylistConfig.getStaticPlaylist(playlistId);
     assert.equal(kept?.name, "Before Failed Edit");
-    assert.deepEqual(kept.tracks.map((track) => track.canonicalJobId), [pendingJobId, downloadingJobId]);
+    assert.deepEqual(kept.tracks.map((track) => track.jobId), [pendingJobId, downloadingJobId]);
     assert.equal(downloadTracker.getJob(pendingJobId)?.status, "pending");
     assert.equal(isDownloadJobCancelled(pendingJobId), false);
     assert.equal(downloadTracker.getJob(downloadingJobId)?.status, "failed");
@@ -308,7 +308,7 @@ test("Subsonic edits wait behind other playlist mutations", async () => {
   let releaseLock;
   const entered = new Promise((resolve) => { signalEntered = resolve; });
   const held = new Promise((resolve) => { releaseLock = resolve; });
-  const currentMutation = withHonkerLock("weekly-flow-operation", async () => {
+  const currentMutation = withHonkerLock("playlist-operation", async () => {
     signalEntered();
     await held;
   });
@@ -345,7 +345,7 @@ test("a Subsonic edit that cannot be saved leaves removed downloads queued", asy
     /Could not save the playlist/,
   );
   t.mock.restoreAll();
-  assert.equal(flowPlaylistConfig.getStaticPlaylist(playlistId)?.tracks[0]?.canonicalJobId, jobId);
+  assert.equal(flowPlaylistConfig.getStaticPlaylist(playlistId)?.tracks[0]?.jobId, jobId);
   assert.equal(isDownloadJobCancelled(jobId), false);
   assert.equal(downloadTracker.getNextPendingMatching((job) => job.id === jobId)?.id, jobId);
 });

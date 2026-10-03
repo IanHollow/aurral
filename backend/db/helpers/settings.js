@@ -165,7 +165,7 @@ export const dbOps = {
       getSettingStmt.get("releaseTypes")?.value
     );
     const flows = readStoredSettingJson("flows");
-    const staticPlaylists = readStoredSettingJson("sharedPlaylists");
+    const staticPlaylists = readStoredSettingJson("staticPlaylists");
     const subsonic = readStoredSettingJson("subsonic") || {};
     const playlistWorker = normalizePlaylistWorkerSettings(
       readStoredSettingJson("playlistWorker"),
@@ -212,7 +212,7 @@ export const dbOps = {
       pathMappings,
       releaseTypes: releaseTypes || [],
       flows: flows || null,
-      sharedPlaylists: staticPlaylists || null,
+      staticPlaylists: staticPlaylists || null,
       subsonic: {
         favoriteAutoKeep: subsonic.favoriteAutoKeep !== false,
       },
@@ -334,10 +334,10 @@ export const dbOps = {
       if (settings.flows !== undefined) {
         upsertSettingStmt.run("flows", dbHelpers.stringifyJSON(settings.flows));
       }
-      if (settings.sharedPlaylists !== undefined) {
+      if (settings.staticPlaylists !== undefined) {
         upsertSettingStmt.run(
-          "sharedPlaylists",
-          dbHelpers.stringifyJSON(settings.sharedPlaylists),
+          "staticPlaylists",
+          dbHelpers.stringifyJSON(settings.staticPlaylists),
         );
       }
       if (settings.subsonic !== undefined) {

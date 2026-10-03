@@ -13,7 +13,7 @@ const canAccessJob = (user, job) =>
   canAccessPlaylistType(user, job.playlistType) ||
   flowPlaylistConfig.getStaticPlaylistsForUser(user).some((playlist) =>
     playlist.tracks?.some(
-      (track) => String(track?.canonicalJobId || "") === String(job.id || ""),
+      (track) => String(track?.jobId || "") === String(job.id || ""),
     ),
   );
 
@@ -24,10 +24,10 @@ export function registerStream(router) {
         .status(401)
         .json({ error: "Unauthorized", message: "Authentication required" });
     }
-    if (req.user && !hasPermission(req.user, "accessFlow")) {
+    if (req.user && !hasPermission(req.user, "accessPlaylists")) {
       return res
         .status(403)
-        .json({ error: "Forbidden", message: "Permission required: accessFlow" });
+        .json({ error: "Forbidden", message: "Permission required: accessPlaylists" });
     }
     const { jobId } = req.params;
     const job = downloadTracker.getJob(jobId);
@@ -56,10 +56,10 @@ export function registerStream(router) {
         .status(401)
         .json({ error: "Unauthorized", message: "Authentication required" });
     }
-    if (req.user && !hasPermission(req.user, "accessFlow")) {
+    if (req.user && !hasPermission(req.user, "accessPlaylists")) {
       return res
         .status(403)
-        .json({ error: "Forbidden", message: "Permission required: accessFlow" });
+        .json({ error: "Forbidden", message: "Permission required: accessPlaylists" });
     }
     const { jobId } = req.params;
     const job = downloadTracker.getJob(jobId);

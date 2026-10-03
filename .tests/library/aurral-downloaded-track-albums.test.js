@@ -222,7 +222,7 @@ test("downloading a missing track of an unmonitored Aurral album monitors and qu
     artistName: "Playlist Artist",
     trackName: missing.title,
     albumName: "Playlist Album",
-    canonicalTrackId: String(missing.id),
+    trackRecordId: String(missing.id),
   });
 
   assert.equal(response.statusCode, 202);

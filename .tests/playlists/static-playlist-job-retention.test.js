@@ -15,7 +15,7 @@ test.beforeEach(() => {
   resetDatabase(db);
   config.invalidateFlowPlaylistConfigCache();
   downloadTracker.clearAll();
-  dbOps.updateSettings({ integrations: {}, flows: [], sharedPlaylists: [] });
+  dbOps.updateSettings({ integrations: {}, flows: [], staticPlaylists: [] });
   honker.getPipelineQueue();
   db.prepare("DELETE FROM _honker_live WHERE queue = 'slskd-pipeline'").run();
 });
@@ -28,7 +28,7 @@ function fixture(t) {
   const track = { artistName: "Artist", trackName: "Track", albumName: "Album" };
   const source = config.flowPlaylistConfig.createStaticPlaylist({ name: "Source", tracks: [] });
   const [jobId] = addStaticPlaylistJobs({ downloadTracker, flowPlaylistConfig: config.flowPlaylistConfig }, source.id, [track]);
-  const survivor = config.flowPlaylistConfig.createStaticPlaylist({ name: "Survivor", tracks: [{ ...track, canonicalJobId: jobId }] });
+  const survivor = config.flowPlaylistConfig.createStaticPlaylist({ name: "Survivor", tracks: [{ ...track, jobId }] });
   return { source, survivor, jobId };
 }
 
@@ -43,9 +43,9 @@ test("single-track removal keeps a queued job and its provider work while anothe
   const { source, survivor, jobId } = fixture(t);
   const payload = { jobId, playlistId: "library", playlistGeneration: 0, phase: "poll", source: "deemix", queueUuid: "needed-provider-work" };
   const queuedId = honker.getPipelineQueue().enqueue(payload);
-  await operations.processPlaylistOperation({ kind: "shared-playlist-delete-track", playlistId: source.id, jobId });
+  await operations.processPlaylistOperation({ kind: "static-playlist-delete-track", playlistId: source.id, jobId });
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(source.id).tracks.length, 0);
-  assert.equal(config.flowPlaylistConfig.getStaticPlaylist(survivor.id).tracks[0].canonicalJobId, jobId);
+  assert.equal(config.flowPlaylistConfig.getStaticPlaylist(survivor.id).tracks[0].jobId, jobId);
   assert.equal(downloadTracker.getJob(jobId)?.status, "pending");
   assert.equal(downloadTracker.getJob(jobId)?.queuedForPlaylist, true);
   assert.deepEqual(JSON.parse(db.prepare("SELECT payload FROM _honker_live WHERE id = ?").get(queuedId).payload), payload);
@@ -55,9 +55,9 @@ test("deleting a playlist with file deletion keeps finished media another playli
   const { source, survivor, jobId } = fixture(t);
   const file = await libraryFile("Track.flac", "disposable audio");
   downloadTracker.setDone(jobId, file);
-  await operations.processPlaylistOperation({ kind: "shared-playlist-delete", playlistId: source.id });
+  await operations.processPlaylistOperation({ kind: "static-playlist-delete", playlistId: source.id });
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(source.id), null);
-  assert.equal(config.flowPlaylistConfig.getStaticPlaylist(survivor.id).tracks[0].canonicalJobId, jobId);
+  assert.equal(config.flowPlaylistConfig.getStaticPlaylist(survivor.id).tracks[0].jobId, jobId);
   assert.equal(downloadTracker.getJob(jobId)?.finalPath, file);
   assert.equal(await fs.readFile(file, "utf8"), "disposable audio");
 });
@@ -68,7 +68,7 @@ test("replacing tracks with file deletion keeps a removed job another playlist r
   downloadTracker.setDone(jobId, file);
   await operations.updateStaticPlaylist({ playlistId: source.id, tracks: [], hasTracksUpdate: true, deleteUnsharedFiles: true });
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(source.id).tracks.length, 0);
-  assert.equal(config.flowPlaylistConfig.getStaticPlaylist(survivor.id).tracks[0].canonicalJobId, jobId);
+  assert.equal(config.flowPlaylistConfig.getStaticPlaylist(survivor.id).tracks[0].jobId, jobId);
   assert.equal(await fs.readFile(file, "utf8"), "referenced audio");
 });
 
@@ -87,7 +87,7 @@ test("removing the last reference deletes queued work and downloaded files but k
   downloadTracker.setQueuedForPlaylist(reusedId, false);
   const libraryJobId = downloadTracker.addJob({ artistName: "Artist", trackName: "Requested" }, "library");
 
-  await operations.processPlaylistOperation({ kind: "shared-playlist-delete", playlistId: source.id });
+  await operations.processPlaylistOperation({ kind: "static-playlist-delete", playlistId: source.id });
 
   assert.equal(downloadTracker.getJob(jobId), null);
   assert.equal(downloadTracker.getJob(queuedId), null);
@@ -113,7 +113,7 @@ test("an import persistence failure preserves an unshared completed job and its 
   config.flowPlaylistConfig.deleteStaticPlaylist(survivor.id);
   const file = await libraryFile("Track.flac", "original audio");
   downloadTracker.setDone(jobId, file);
-  db.exec("CREATE TRIGGER reject_import BEFORE INSERT ON settings WHEN NEW.key = 'sharedPlaylists' BEGIN SELECT RAISE(ABORT, 'import save rejected'); END");
+  db.exec("CREATE TRIGGER reject_import BEFORE INSERT ON settings WHEN NEW.key = 'staticPlaylists' BEGIN SELECT RAISE(ABORT, 'import save rejected'); END");
   t.after(() => db.exec("DROP TRIGGER IF EXISTS reject_import"));
   await assert.rejects(operations.updateStaticPlaylist({ playlistId: source.id, tracks: [], hasTracksUpdate: true, deleteUnsharedFiles: true }), /import save rejected/);
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(source.id).tracks.length, 1);
@@ -131,12 +131,12 @@ test("whole-playlist deletion resumes external cleanup after membership commits"
   t.mock.method(playlistManager, "deletePlaybackPlaylist", async () => {
     if (fail) throw new Error("playback unavailable");
   });
-  const operation = { kind: "shared-playlist-delete", playlistId: source.id };
+  const operation = { kind: "static-playlist-delete", playlistId: source.id };
   await assert.rejects(operations.processPlaylistOperation(operation), /playback unavailable/);
   assert.ok(config.flowPlaylistConfig.getStaticPlaylist(source.id));
   fail = false;
   await operations.processPlaylistOperation(operation);
   assert.equal(config.flowPlaylistConfig.getStaticPlaylist(source.id), null);
-  assert.equal(config.flowPlaylistConfig.getStaticPlaylist(survivor.id).tracks[0].canonicalJobId, jobId);
+  assert.equal(config.flowPlaylistConfig.getStaticPlaylist(survivor.id).tracks[0].jobId, jobId);
   assert.equal(await fs.readFile(file, "utf8"), "completed retained audio");
 });

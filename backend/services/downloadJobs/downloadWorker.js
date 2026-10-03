@@ -43,7 +43,7 @@ const JOB_COOLDOWN_MS = 750;
 const REUSE_REPAIR_INTERVAL_MS = 30 * 60 * 1000;
 const WORKER_STOPPED_CODE = "WORKER_STOPPED";
 const PLAYLIST_MUTATION_CODE = "PLAYLIST_MUTATION_IN_PROGRESS";
-const RETRY_JOB_REGISTRY_KEY = "weeklyFlowIncompleteRetryJobs";
+const RETRY_JOB_REGISTRY_KEY = "incompleteRetryJobs";
 export class DownloadWorker {
   constructor(downloadRoot = resolveDownloadRoot()) {
     this.downloadRoot = resolveDownloadRoot(downloadRoot);

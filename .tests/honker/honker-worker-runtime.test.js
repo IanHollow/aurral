@@ -31,7 +31,7 @@ test.after(async () => {
 
 test("getHonkerQueueDepth counts claimable pending jobs", () => {
   honkerDb.getPlaylistOperationQueue().enqueue({ kind: "noop-test" });
-  const depth = honkerDb.getHonkerQueueDepth("weekly-flow-operation");
+  const depth = honkerDb.getHonkerQueueDepth("playlist-operation");
   assert.equal(depth, 1);
 });
 

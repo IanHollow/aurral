@@ -9,7 +9,7 @@ import { db } from "../../config/db-sqlite.js";
 import { getFlowCapabilities } from "../listenbrainzDiscoveryFallback.js";
 import { getStaticPlaylistJobs } from "./staticPlaylistJobs.js";
 
-const playlistSettingsStmt = db.prepare("SELECT key, value FROM settings WHERE key IN ('flows', 'sharedPlaylists') ORDER BY key");
+const playlistSettingsStmt = db.prepare("SELECT key, value FROM settings WHERE key IN ('flows', 'staticPlaylists') ORDER BY key");
 const membershipCache = new Map();
 const MEMBERSHIP_CACHE_LIMIT = 128;
 let cachedSettings = null;
@@ -223,7 +223,7 @@ export function getPlaylistStatusSnapshot({
     ownerUsername: ownerMap.get(Number(playlist?.ownerUserId)) || null,
   }));
   const stats = aggregateStats(scopedStats, flowIds);
-  const sharedStats = aggregateStats(scopedStats, staticPlaylistIds);
+  const staticPlaylistTotals = aggregateStats(scopedStats, staticPlaylistIds);
   const nextRunMessage = formatNextRunMessage(flowsWithOwners);
   const operationQueue = playlistOperationQueue.getStatus();
   const operationWorker = workerStatus?.operationWorker || getPlaylistOperationWorkerStatus();
@@ -275,10 +275,10 @@ export function getPlaylistStatusSnapshot({
     slskd: getDownloadClient("slskd").getStatus(),
     stats,
     flowStats,
-    sharedStats,
-    sharedPlaylistStats: staticPlaylistStats,
+    staticPlaylistTotals,
+    staticPlaylistStats: staticPlaylistStats,
     flows: flowsWithOwners,
-    sharedPlaylists: staticPlaylistsWithOwners,
+    staticPlaylists: staticPlaylistsWithOwners,
     capabilities: getFlowCapabilities(),
     retryCyclePausedByPlaylist,
     retryCycleScheduledByPlaylist,

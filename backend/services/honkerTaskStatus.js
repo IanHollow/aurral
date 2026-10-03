@@ -32,11 +32,11 @@ export const QUEUE_DEFINITIONS = [
     worker: "system-task-inbox",
   },
   {
-    queue: "weekly-flow-operation",
+    queue: "playlist-operation",
     label: "Playlist Operations",
     workerLabel: "Playlist Operation Worker",
     description: "Applies playlist edits, manual runs, flow changes, and track actions.",
-    worker: "weekly-flow-operation",
+    worker: "playlist-operation",
   },
   {
     queue: "slskd-pipeline",
@@ -97,7 +97,7 @@ export const QUEUE_DEFINITIONS = [
 ];
 
 export const SYSTEM_TASK_LABELS = {
-  "weekly-flow-refresh": {
+  "flow-refresh": {
     label: "Playlist Schedule Check",
     description: "Queues enabled playlist flows that are due to run.",
   },
@@ -105,15 +105,15 @@ export const SYSTEM_TASK_LABELS = {
     label: "Session Cleanup",
     description: "Removes expired login sessions from the app database.",
   },
-  "weekly-flow-reuse-repair": {
+  "file-reuse-repair": {
     label: "Playlist File Reuse Repair",
     description: "Repairs reusable playlist file links when source files move.",
   },
-  "weekly-flow-startup-reuse-repair": {
+  "startup-file-reuse-repair": {
     label: "Startup Playlist Reuse Repair",
     description: "Checks reusable playlist links after Aurral starts.",
   },
-  "weekly-flow-startup-check": {
+  "flow-startup-check": {
     label: "Startup Playlist Schedule Check",
     description: "Resumes pending playlist work after Aurral starts.",
   },
@@ -152,7 +152,7 @@ const queueDefinitionByName = new Map(
 
 const PAYLOAD_LABEL_KEY = {
   "slskd-pipeline": "phase",
-  "weekly-flow-operation": (p) =>
+  "playlist-operation": (p) =>
     formatPayloadLabel(p?.label || p?.kind) || null,
   "playlist-retry": "playlistType",
   "playlist-reserve-build": "playlistType",

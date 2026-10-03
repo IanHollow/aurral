@@ -107,7 +107,7 @@ const captureEnqueues = (t) => {
 
 test.beforeEach(() => {
   resetDatabase(db);
-  dbOps.updateSettings({ integrations: {}, onboardingComplete: true, flows: [], sharedPlaylists: [] });
+  dbOps.updateSettings({ integrations: {}, onboardingComplete: true, flows: [], staticPlaylists: [] });
   invalidateFlowPlaylistConfigCache();
 });
 

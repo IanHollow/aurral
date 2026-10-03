@@ -1128,7 +1128,7 @@ test("indexLidarrLibrary keeps artists without albums and refreshes monitoring m
     assert.equal(projection?.name, "Albumless Artist");
     assert.equal(projection?.foreignArtistId, providerArtistId);
     assert.equal(projection?.providerId, "1212");
-    assert.equal(projection?.id, projection?.canonicalId);
+    assert.equal(projection?.id, projection?.recordId);
     assert.deepEqual(projection?.sources, ["lidarr"]);
     assert.equal(projection?.lidarrManaged, true);
     assert.equal(projection?.monitored, false);

@@ -155,18 +155,26 @@ function trackFromJob(job) {
       }
     })(),
     reason: job.reason || null,
-    canonicalJobId: job.id,
+    jobId: job.id,
     membershipId: randomUUID(),
   };
 }
 
+function readStaticPlaylists(db) {
+  return readJsonSetting(db, "sharedPlaylists", []).map((playlist) => ({
+    ...playlist,
+    tracks: (Array.isArray(playlist?.tracks) ? playlist.tracks : []).map(({ canonicalJobId, ...track }) =>
+      canonicalJobId ? { ...track, jobId: canonicalJobId } : track),
+  }));
+}
+
 function linkPlaylistTracks(playlist, jobs) {
-  const tracks = (Array.isArray(playlist.tracks) ? playlist.tracks : []).map((track) => ({ ...track }));
+  const tracks = playlist.tracks.map((track) => ({ ...track }));
   for (const job of jobs) {
     const track =
-      tracks.find((entry) => !entry.canonicalJobId && trackIdentity(entry) === trackIdentity(job)) ||
-      tracks.find((entry) => !entry.canonicalJobId && coreIdentity(entry) === coreIdentity(job));
-    if (track) track.canonicalJobId = job.id;
+      tracks.find((entry) => !entry.jobId && trackIdentity(entry) === trackIdentity(job)) ||
+      tracks.find((entry) => !entry.jobId && coreIdentity(entry) === coreIdentity(job));
+    if (track) track.jobId = job.id;
     else tracks.push(trackFromJob(job));
   }
   return { ...playlist, tracks, trackCount: tracks.length };
@@ -178,7 +186,7 @@ function hasTable(db, name) {
 
 function moveStaticPlaylistJobsIntoLibrary(db) {
   db.exec("ALTER TABLE playlist_download_jobs ADD COLUMN queued_for_playlist INTEGER NOT NULL DEFAULT 0");
-  const playlists = readJsonSetting(db, "sharedPlaylists", []);
+  const playlists = readStaticPlaylists(db);
   const flowIds = new Set(readJsonSetting(db, "flows", []).map((flow) => flow?.id).filter(Boolean));
   const staticIds = new Set(playlists.map((playlist) => playlist?.id).filter(Boolean));
   const isMoved = (owner) => owner !== LIBRARY_OWNER && !flowIds.has(owner);
@@ -213,7 +221,8 @@ function moveStaticPlaylistJobsIntoLibrary(db) {
   }
   const nextPlaylists = playlists.map((playlist) =>
     jobsByPlaylist.has(playlist.id) ? linkPlaylistTracks(playlist, jobsByPlaylist.get(playlist.id)) : playlist);
-  db.prepare("UPDATE settings SET value = ? WHERE key = 'sharedPlaylists'").run(JSON.stringify(nextPlaylists));
+  db.prepare("DELETE FROM settings WHERE key = 'sharedPlaylists'").run();
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('staticPlaylists', ?)").run(JSON.stringify(nextPlaylists));
   db.prepare("DELETE FROM weekly_flow_download_cancellations WHERE playlist_id != ? AND playlist_id NOT IN (SELECT value FROM json_each(?))")
     .run(LIBRARY_OWNER, JSON.stringify([...flowIds]));
   const moveProviderWork = db.prepare("UPDATE weekly_flow_download_provider_work SET playlist_id = ? WHERE job_id = ?");
@@ -244,11 +253,65 @@ function moveStaticPlaylistJobsIntoLibrary(db) {
   }
 }
 
+const RENAMED_TASK_KINDS = {
+  "weekly-flow-refresh": "flow-refresh",
+  "weekly-flow-startup-check": "flow-startup-check",
+  "weekly-flow-reuse-repair": "file-reuse-repair",
+  "weekly-flow-startup-reuse-repair": "startup-file-reuse-repair",
+};
+
+const renamePrefix = (value, from, to) =>
+  typeof value === "string" && value.startsWith(from) ? `${to}${value.slice(from.length)}` : value;
+
+function renameQueuedWork(db) {
+  const flowIds = new Set(readJsonSetting(db, "flows", []).map((flow) => flow?.id).filter(Boolean));
+  const retryJobs = readJsonSetting(db, "weeklyFlowIncompleteRetryJobs", {});
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('incompleteRetryJobs', ?)").run(JSON.stringify(
+    Object.fromEntries(Object.entries(retryJobs).filter(([owner]) => owner === LIBRARY_OWNER || flowIds.has(owner))),
+  ));
+  const insertToken = db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)");
+  for (const row of db.prepare("SELECT key, value FROM settings WHERE key GLOB 'weeklyFlowOperationTokens:*'").all()) {
+    insertToken.run(renamePrefix(row.key, "weeklyFlowOperationTokens:", "playlistOperationTokens:"), row.value);
+  }
+  for (const [scope, token] of Object.entries(readJsonSetting(db, "weeklyFlowOperationTokens", {}))) {
+    insertToken.run(`playlistOperationTokens:${encodeURIComponent(scope)}`, JSON.stringify(token));
+  }
+  db.prepare("DELETE FROM settings WHERE key GLOB 'weeklyFlowOperationTokens*' OR key = 'weeklyFlowIncompleteRetryJobs'").run();
+  if (!hasTable(db, "_honker_live")) return;
+  db.prepare("UPDATE _honker_live SET queue = 'playlist-operation' WHERE queue = 'weekly-flow-operation'").run();
+  const updatePayload = db.prepare("UPDATE _honker_live SET payload = ? WHERE id = ?");
+  for (const row of db.prepare("SELECT id, payload FROM _honker_live").all()) {
+    let payload;
+    try {
+      payload = JSON.parse(row.payload);
+    } catch {
+      continue;
+    }
+    if (!payload || typeof payload !== "object") continue;
+    const kind = RENAMED_TASK_KINDS[payload.kind] || renamePrefix(payload.kind, "shared-playlist-", "static-playlist-");
+    const label = renamePrefix(payload.label, "shared-playlist:", "static-playlist:");
+    if (kind !== payload.kind || label !== payload.label) {
+      updatePayload.run(JSON.stringify({ ...payload, kind, ...(label === undefined ? {} : { label }) }), row.id);
+    }
+  }
+}
+
 export function upgradeFromAurral2(db) {
   const removeSettings = db.prepare("DELETE FROM settings WHERE key GLOB ?");
   for (const pattern of RETIRED_SETTING_PATTERNS) removeSettings.run(pattern);
   removeRetiredIntegrations(db);
   moveStaticPlaylistJobsIntoLibrary(db);
+  renameQueuedWork(db);
+  db.exec(`
+    UPDATE users SET permissions = replace(permissions, '"accessFlow"', '"accessPlaylists"');
+    UPDATE settings SET value = replace(value, '"notifyWeeklyFlowDone"', '"notifyFlowDone"') WHERE key = 'integrations';
+  `);
+  if (hasTable(db, "_honker_live")) {
+    db.exec(`
+      UPDATE _honker_live SET payload = replace(payload, '"notifyWeeklyFlowDone"', '"notifyFlowDone"')
+      WHERE queue = 'notification-outbox';
+    `);
+  }
   db.exec(`
     ALTER TABLE users DROP COLUMN needs_identity_migration;
     ALTER TABLE users DROP COLUMN allow_identity_adoption;

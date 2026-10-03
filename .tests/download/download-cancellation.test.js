@@ -96,7 +96,7 @@ test("provider cancellation retry retains IDs from pipeline rows removed on the 
 });
 
 test("playlist deletion invalidates queued payloads across recreation", () => {
-  const playlistId = "shared-playlist";
+  const playlistId = "static-playlist";
   const firstGeneration = activatePlaylistDownloadGeneration(playlistId);
   const payload = {
     jobId: "job-one",
@@ -187,7 +187,7 @@ test("quality-upgrade jobs retain their source playlist generation", () => {
 test("job cancellation remains effective after the tracker row is removed", () => {
   const payload = {
     jobId: "job-removed",
-    playlistId: "shared-playlist",
+    playlistId: "static-playlist",
     playlistGeneration: 0,
   };
 
@@ -276,7 +276,7 @@ test("static playlist deletion cancels its Library downloads before clearing the
   t.mock.method(playlistManager, "ensureSmartPlaylists", async () => {});
 
   await processPlaylistOperation({
-    kind: "shared-playlist-delete",
+    kind: "static-playlist-delete",
     playlistId,
   });
 
@@ -486,7 +486,7 @@ test("failed provider cancellation keeps durable slskd work for a later retry", 
 });
 
 test("failed static playlist replacement preserves membership and leaves a recoverable job", async () => {
-  const playlistId = "shared-playlist-edit-provider-retry";
+  const playlistId = "static-playlist-edit-provider-retry";
   const track = { artistName: "Retry Artist", trackName: "Retry Song" };
   const originalSettings = dbOps.getSettings();
   const mock = await createMockHttpServer((request, response) => {
@@ -514,7 +514,7 @@ test("failed static playlist replacement preserves membership and leaves a recov
     jobId,
     playlistId: "library",
     provider: "slskd-search",
-    workId: "shared-playlist-edit-search",
+    workId: "static-playlist-edit-search",
   });
 
   try {
@@ -544,7 +544,7 @@ test("failed static playlist replacement preserves membership and leaves a recov
 });
 
 test("failed static playlist deletion preserves membership and leaves a recoverable job", async () => {
-  const playlistId = "shared-playlist-delete-provider-retry";
+  const playlistId = "static-playlist-delete-provider-retry";
   const originalSettings = dbOps.getSettings();
   const mock = await createMockHttpServer((request, response) => {
     request.resume();
@@ -574,12 +574,12 @@ test("failed static playlist deletion preserves membership and leaves a recovera
     jobId,
     playlistId: "library",
     provider: "slskd-search",
-    workId: "shared-playlist-delete-search",
+    workId: "static-playlist-delete-search",
   });
 
   try {
     await assert.rejects(
-      processPlaylistOperation({ kind: "shared-playlist-delete", playlistId }),
+      processPlaylistOperation({ kind: "static-playlist-delete", playlistId }),
       /Could not cancel download provider work/,
     );
 

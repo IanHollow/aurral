@@ -45,7 +45,7 @@ const toPlaylistInfo = (status) => {
       ...entry,
       kind: "flow",
     })),
-    ...(Array.isArray(status?.sharedPlaylists) ? status.sharedPlaylists : []).map((entry) => ({
+    ...(Array.isArray(status?.staticPlaylists) ? status.staticPlaylists : []).map((entry) => ({
       ...entry,
       kind: "playlist",
     })),

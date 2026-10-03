@@ -290,7 +290,7 @@ export const normalizePlaylistTrack = (track) => {
     ? track.artistAliases.map((entry) => String(entry || "").trim()).filter(Boolean)
     : [];
   const reason = String(track.reason ?? "").trim();
-  const canonicalJobId = String(track.canonicalJobId ?? track.libraryJobId ?? "").trim();
+  const jobId = String(track.jobId ?? track.libraryJobId ?? "").trim();
   const membershipId = String(track.membershipId || "").trim();
   return {
     artistName,
@@ -303,7 +303,7 @@ export const normalizePlaylistTrack = (track) => {
     durationMs,
     artistAliases,
     reason: reason || null,
-    ...(canonicalJobId ? { canonicalJobId } : {}),
+    ...(jobId ? { jobId } : {}),
     ...(membershipId ? { membershipId } : {}),
   };
 };
@@ -493,7 +493,7 @@ const getStoredStaticPlaylists = () => {
   }
   staticPlaylistsCachedAt = Date.now();
   const settings = dbOps.getSettings();
-  const stored = settings.sharedPlaylists;
+  const stored = settings.staticPlaylists;
   if (Array.isArray(stored)) {
     const next = stored.map(normalizeStaticPlaylist);
     const needsSave =
@@ -502,7 +502,7 @@ const getStoredStaticPlaylists = () => {
     if (needsSave) {
       dbOps.updateSettings({
         ...settings,
-        sharedPlaylists: next,
+        staticPlaylists: next,
       });
     }
     cachedStaticPlaylists = next;
@@ -510,7 +510,7 @@ const getStoredStaticPlaylists = () => {
   }
   dbOps.updateSettings({
     ...settings,
-    sharedPlaylists: [],
+    staticPlaylists: [],
   });
   cachedStaticPlaylists = [];
   return cachedStaticPlaylists;
@@ -521,7 +521,7 @@ const setStaticPlaylists = (playlists) => {
   staticPlaylistsCachedAt = Date.now();
   const current = dbOps.getSettings();
   try {
-    dbOps.updateSettings({ ...current, sharedPlaylists: playlists });
+    dbOps.updateSettings({ ...current, staticPlaylists: playlists });
   } catch (error) {
     dbOps.invalidateSettingsCache();
     invalidateFlowPlaylistConfigCache();
@@ -921,7 +921,7 @@ export const flowPlaylistConfig = {
           ? normalizeImportSource(updates.importSource)
           : current.importSource,
       tracks: Array.isArray(updates?.tracks) ? dedupePlaylistTracks(updates.tracks).map((track) => {
-        const previous = current.tracks.find((entry) => entry.canonicalJobId === track.canonicalJobId && tracksShareMembership(entry, track));
+        const previous = current.tracks.find((entry) => entry.jobId === track.jobId && tracksShareMembership(entry, track));
         return { ...track, membershipId: previous?.membershipId || randomUUID() };
       }) : current.tracks,
       importedAt: current.importedAt,

@@ -193,7 +193,7 @@ test("playlist job file paths are only returned to admins", async (t) => {
   assert.equal(adminResponse.status, 200);
   assert.deepEqual(await adminResponse.json(), { paths: [finalPath] });
 
-  requestUser = { id: 1, role: "user", permissions: { accessFlow: true } };
+  requestUser = { id: 1, role: "user", permissions: { accessPlaylists: true } };
   const userResponse = await fetch(`${baseUrl}/jobs/${jobId}/files`);
   assert.equal(userResponse.status, 403);
   assert.equal(JSON.stringify(await userResponse.json()).includes(finalPath), false);
@@ -853,7 +853,7 @@ test("wanted covers every library job regardless of playlist access", async () =
 
     downloadTracker.setFailed(missingJobId, "Still no source");
     const research = await processPlaylistOperation({
-      kind: "shared-playlist-research-track",
+      kind: "static-playlist-research-track",
       playlistId: "library",
       jobId: missingJobId,
     });

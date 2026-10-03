@@ -163,7 +163,7 @@ function buildAlbumConflict(album, message = null) {
     manager: album?.managedBy || null,
     currentManager: album?.managedBy || null,
     sources: Array.isArray(album?.sources) ? album.sources : [],
-    canonicalId: album?.canonicalId || album?.id || null,
+    recordId: album?.recordId || album?.id || null,
     providerId: album?.providerId || album?.foreignAlbumId || album?.mbid || null,
     availability: {
       available: Boolean(album?.available),
@@ -205,7 +205,7 @@ function mapLibraryAlbum(album, artist, tracks = []) {
   const trackCount = albumTracks.length;
   return {
     id: String(album.id),
-    canonicalId: String(album.id),
+    recordId: String(album.id),
     providerId: album.metadata?.id ?? null,
     artistId: String(album.artistId),
     artistName: artist?.name || album.albumArtist || null,
@@ -240,7 +240,7 @@ function mapLibraryTrack(track, album) {
   const relation = (track.albums || []).find((entry) => entry.albumId === album?.id);
   return {
     id: String(track.id),
-    canonicalId: String(track.id),
+    recordId: String(track.id),
     providerId: track.metadata?.id ?? null,
     albumId: album ? String(album.id) : null,
     artistId: album ? String(album.artistId) : null,
@@ -520,7 +520,7 @@ function findCachedArtistById(id) {
     return null;
   }
   return _cachedArtists.find((artist) =>
-    [artist?.id, artist?.canonicalId, artist?.providerId].some(
+    [artist?.id, artist?.recordId, artist?.providerId].some(
       (candidate) => String(candidate ?? "").trim() === value,
     ),
   ) || null;
@@ -629,7 +629,7 @@ export function buildPlaybackQueueFromLibrary({ artists = [], albums = [], track
         title: track.title || "Unknown Track",
         artist: artist?.name || track.artistName || "Unknown Artist",
         album: album.title || "Unknown Album",
-        streamPath: `/library/canonical-stream/${encodeURIComponent(album.id)}/${encodeURIComponent(track.id)}`,
+        streamPath: `/library/records/stream/${encodeURIComponent(album.id)}/${encodeURIComponent(track.id)}`,
         streamFormat: file.format || null,
         quality: file.quality?.quality?.name || file.quality?.audioFormat || null,
         trackNumber: relation?.trackNumber || 0,
@@ -925,7 +925,7 @@ export class LibraryManager {
     let eligibleAlbums = (Array.isArray(albums)
       ? albums
       : await this.getAlbums(artist.id, null, { forceRefresh: true }))
-      .filter((album) => album.canonicalId == null);
+      .filter((album) => album.recordId == null);
 
     if (lidarr && lidarr.isConfigured() && artist?.id) {
       try {
@@ -2082,14 +2082,14 @@ export class LibraryManager {
     return { artists: monitoredArtists.length, queuedAlbums, failedArtists };
   }
 
-  _resolveAurralAlbum(canonicalId) {
-    const reference = String(canonicalId ?? "").trim();
+  _resolveAurralAlbum(recordId) {
+    const reference = String(recordId ?? "").trim();
     const id = Number(reference);
     if (!/^\d+$/.test(reference) || !Number.isSafeInteger(id) || id <= 0) {
       return {
-        error: "canonicalId must be a positive integer",
+        error: "recordId must be a positive integer",
         statusCode: 400,
-        code: "invalid_canonical_id",
+        code: "invalid_record_id",
       };
     }
     const library = libraryForAlbum(id);
@@ -2118,15 +2118,15 @@ export class LibraryManager {
     };
   }
 
-  async setAurralAlbumMonitoring(canonicalId, { monitored } = {}) {
+  async setAurralAlbumMonitoring(recordId, { monitored } = {}) {
     if (typeof monitored !== "boolean") {
       return { error: "monitored must be true or false", statusCode: 400, code: "invalid_monitored" };
     }
     if (monitored && await getActiveLibraryManager() !== "aurral") {
       return { error: MANAGER_UNAVAILABLE.lidarr, statusCode: 409, code: "library_manager_unavailable" };
     }
-    return serializeMonitoringUpdate(_albumMonitoringUpdates, Number(canonicalId), async () => {
-      const resolved = this._resolveAurralAlbum(canonicalId);
+    return serializeMonitoringUpdate(_albumMonitoringUpdates, Number(recordId), async () => {
+      const resolved = this._resolveAurralAlbum(recordId);
       if (resolved.error) return resolved;
       const { album, mappedAlbum } = resolved;
       this._setAurralAlbumMonitored(album, monitored);
@@ -2167,27 +2167,27 @@ export class LibraryManager {
     invalidateLibraryQueryCache({ persistedGenres: false });
   }
 
-  getAurralAlbumStatus(canonicalId) {
-    const resolved = this._resolveAurralAlbum(canonicalId);
+  getAurralAlbumStatus(recordId) {
+    const resolved = this._resolveAurralAlbum(recordId);
     if (resolved.error) return resolved;
     const { album, library, mappedAlbum } = resolved;
     return {
-      canonicalId: mappedAlbum.canonicalId,
+      recordId: mappedAlbum.recordId,
       ...this._summarizeAurralAlbum(album, library.tracks),
     };
   }
 
-  async setAurralTrackMonitoring(canonicalId, { monitored } = {}) {
+  async setAurralTrackMonitoring(recordId, { monitored } = {}) {
     if (typeof monitored !== "boolean") {
       return { error: "monitored must be true or false", statusCode: 400, code: "invalid_monitored" };
     }
-    const reference = String(canonicalId ?? "").trim();
+    const reference = String(recordId ?? "").trim();
     const trackId = Number(reference);
     if (!/^\d+$/.test(reference) || !Number.isSafeInteger(trackId) || trackId <= 0) {
       return {
-        error: "canonicalId must be a positive integer",
+        error: "recordId must be a positive integer",
         statusCode: 400,
-        code: "invalid_canonical_id",
+        code: "invalid_record_id",
       };
     }
     return serializeMonitoringUpdate(_trackMonitoringUpdates, trackId, async () => {
@@ -2208,7 +2208,7 @@ export class LibraryManager {
           cancelledJobIds.push(...cancellation.cancelledJobIds);
           cleanupFailed = cancellation.cleanupFailed;
         }
-        return { canonicalId: String(trackId), monitored, cancelledJobIds, queuedJobIds, cleanupFailed, albumManaged: false };
+        return { recordId: String(trackId), monitored, cancelledJobIds, queuedJobIds, cleanupFailed, albumManaged: false };
       }
       if (monitored) {
         const album = aurralAlbums.find((entry) => isMonitoredAurralAlbum(entry.id)) || aurralAlbums[0];
@@ -2222,40 +2222,40 @@ export class LibraryManager {
           cleanupFailed ||= cancellation.cleanupFailed;
         }
       }
-      return { canonicalId: String(trackId), monitored, cancelledJobIds, queuedJobIds, cleanupFailed };
+      return { recordId: String(trackId), monitored, cancelledJobIds, queuedJobIds, cleanupFailed };
     });
   }
 
-  async monitorAurralTrack({ canonicalTrackId = null, trackMbid = null } = {}) {
+  async monitorAurralTrack({ trackRecordId = null, trackMbid = null } = {}) {
     const mbid = String(trackMbid || "").trim();
-    const trackId = /^\d+$/.test(String(canonicalTrackId ?? "").trim())
-      ? Number(canonicalTrackId)
+    const trackId = /^\d+$/.test(String(trackRecordId ?? "").trim())
+      ? Number(trackRecordId)
       : (mbid && trackIdByMbidStmt.get(mbid)?.id) || null;
     if (!trackId) return null;
     const result = await this.setAurralTrackMonitoring(trackId, { monitored: true });
     return result?.error || result?.albumManaged === false ? null : result;
   }
 
-  async searchAurralAlbumMissingTracks(canonicalId) {
-    const albumId = Number(canonicalId);
+  async searchAurralAlbumMissingTracks(recordId) {
+    const albumId = Number(recordId);
     return serializeMonitoringUpdate(_albumMonitoringUpdates, albumId, () =>
       this._finishAurralAlbum(albumId, { skipCancelledTracks: true }));
   }
 
-  async cancelAurralAlbum(canonicalId) {
-    const resolved = this._resolveAurralAlbum(canonicalId);
+  async cancelAurralAlbum(recordId) {
+    const resolved = this._resolveAurralAlbum(recordId);
     if (resolved.error) return resolved;
     const { album, mappedAlbum } = resolved;
     const result = await cancelAurralAlbumJobs(album.mbid || album.releaseGroupMbid);
     return {
-      canonicalId: mappedAlbum.canonicalId,
+      recordId: mappedAlbum.recordId,
       managedBy: "aurral",
       ...result,
     };
   }
 
-  async deleteAurralAlbum(canonicalId, deleteFiles = false) {
-    const resolved = this._resolveAurralAlbum(canonicalId);
+  async deleteAurralAlbum(recordId, deleteFiles = false) {
+    const resolved = this._resolveAurralAlbum(recordId);
     if (resolved.error) return resolved;
     const { album, library, mappedAlbum } = resolved;
     const artistState = getLibraryManagementEntry("artist", Number(album.artistId));
@@ -2268,7 +2268,7 @@ export class LibraryManager {
     }
     const result = await this._removeAurralAlbumContents(album, library.tracks, deleteFiles);
     if (result.error) return result;
-    return { success: true, canonicalId: mappedAlbum.canonicalId };
+    return { success: true, recordId: mappedAlbum.recordId };
   }
 
   async _removeAurralAlbumContents(album, libraryTracks, deleteFiles) {

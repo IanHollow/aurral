@@ -490,7 +490,7 @@ export function registerDownloads(router) {
       if (alreadyOwned) return res.json({ success: true, alreadyOwned: true, queued: false });
 
       const monitoredTrack = await libraryManager.monitorAurralTrack({
-        canonicalTrackId: body.canonicalTrackId,
+        trackRecordId: body.trackRecordId,
         trackMbid: track.trackMbid,
       });
       if (monitoredTrack) {

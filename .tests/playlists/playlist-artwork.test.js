@@ -28,7 +28,7 @@ test.beforeEach(() => {
     playlistArtwork: { style: "aurral" },
     onboardingComplete: true,
     flows: [],
-    sharedPlaylists: [],
+    staticPlaylists: [],
   });
 });
 

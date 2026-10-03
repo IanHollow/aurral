@@ -22,7 +22,7 @@ const root = process.env.DOWNLOAD_FOLDER;
 test.beforeEach(async () => {
   resetDatabase(db);
   downloadTracker.clearAll();
-  dbOps.updateSettings({ integrations: {}, flows: [], sharedPlaylists: [], onboardingComplete: true, downloadFolderPath: root });
+  dbOps.updateSettings({ integrations: {}, flows: [], staticPlaylists: [], onboardingComplete: true, downloadFolderPath: root });
   await fs.rm(root, { recursive: true, force: true });
 });
 test.after(async () => { db.close(); await cleanupIsolatedState(state); });

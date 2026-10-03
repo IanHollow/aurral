@@ -55,7 +55,7 @@ test.beforeEach(async () => {
     integrations: {},
     onboardingComplete: true,
     flows: [],
-    sharedPlaylists: [],
+    staticPlaylists: [],
   });
   downloadTracker.clearAll();
   await fs.rm(downloadRoot, { recursive: true, force: true });

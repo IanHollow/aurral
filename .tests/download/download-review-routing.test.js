@@ -139,7 +139,7 @@ test("pipeline completion leaves the library scan to playlist completion", async
   const { flowPlaylistConfig } = await importFromRepo("backend/services/playlists/flowPlaylistConfig.js");
   const playlist = flowPlaylistConfig.createStaticPlaylist({
     name: "Completed playlist",
-    tracks: [{ artistName: "Artist", trackName: "Track", canonicalJobId: "pipeline-job" }],
+    tracks: [{ artistName: "Artist", trackName: "Track", jobId: "pipeline-job" }],
   });
   const scheduleScanLibrary = t.mock.method(playlistManager, "scheduleScanLibrary", () => 1);
   const refreshPlaylist = t.mock.method(playlistManager, "refreshPlaylist", async () => null);

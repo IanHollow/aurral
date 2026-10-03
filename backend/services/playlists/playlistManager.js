@@ -132,7 +132,7 @@ export class PlaylistManager {
       const owner = job.playlistId || job.playlistType;
       if (flowPlaylistConfig.getFlow(owner)) ids.add(owner);
       for (const playlist of staticPlaylists) {
-        if (playlist.tracks.some((track) => track.canonicalJobId === job.id)) ids.add(playlist.id);
+        if (playlist.tracks.some((track) => track.jobId === job.id)) ids.add(playlist.id);
       }
     }
     return [...ids];

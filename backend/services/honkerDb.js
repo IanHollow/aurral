@@ -11,7 +11,7 @@ export const HONKER_QUEUE_NAMES = [
   "release-metadata-refresh",
   "system-task-maintenance",
   "system-task-inbox",
-  "weekly-flow-operation",
+  "playlist-operation",
   "slskd-pipeline",
   "playlist-retry",
   "playlist-reserve-build",
@@ -67,10 +67,10 @@ export function getHonkerOpenOptions() {
 
 export const SCHEDULED_SYSTEM_TASKS = [
   {
-    name: "weekly-flow-refresh",
+    name: "flow-refresh",
     queue: "system-task-maintenance",
     schedule: "@every 1h",
-    payload: { kind: "weekly-flow-refresh" },
+    payload: { kind: "flow-refresh" },
   },
   {
     name: "session-cleanup",
@@ -79,10 +79,10 @@ export const SCHEDULED_SYSTEM_TASKS = [
     payload: { kind: "session-cleanup" },
   },
   {
-    name: "weekly-flow-reuse-repair",
+    name: "file-reuse-repair",
     queue: "system-task",
     schedule: "@every 30m",
-    payload: { kind: "weekly-flow-reuse-repair" },
+    payload: { kind: "file-reuse-repair" },
   },
   {
     name: "quality-upgrade-check",
@@ -286,7 +286,7 @@ export const getDiscoveryUserRefreshQueue = discoveryUserRefresh.getQueue;
 export const enqueueDiscoveryUserRefreshJob = discoveryUserRefresh.enqueueJob;
 
 const playlistOperation = registerQueue({
-  name: "weekly-flow-operation",
+  name: "playlist-operation",
   visibilityTimeoutS: 3600,
   maxAttempts: 3,
   workerModule: "./playlists/playlistOperationWorker.js",
@@ -370,7 +370,7 @@ export function getSystemTaskQueueName(kind) {
   if (kind === "release-metadata-refresh") return "release-metadata-refresh";
   if (kind === "inbox-refresh") return "system-task-inbox";
   if (kind === "session-cleanup" || kind === "news-refresh" ||
-      kind === "weekly-flow-refresh") return "system-task-maintenance";
+      kind === "flow-refresh") return "system-task-maintenance";
   return "system-task";
 }
 
@@ -546,7 +546,7 @@ export function enqueueHonkerStartupTasks() {
     );
     return existing?.id || enqueueSystemTaskJob(payload, options);
   };
-  enqueueIfAbsent({ kind: "weekly-flow-startup-check" }, { delaySeconds: 5, priority: 5 });
+  enqueueIfAbsent({ kind: "flow-startup-check" }, { delaySeconds: 5, priority: 5 });
   enqueueIfAbsent({ kind: "discovery-bootstrap" }, { delaySeconds: 15, priority: 5 });
   enqueueIfAbsent({ kind: "library-index-bootstrap" }, { delaySeconds: 8, priority: 0 });
   enqueueIfAbsent({ kind: "release-metadata-refresh" }, { delaySeconds: 12, priority: -5 });

@@ -233,7 +233,7 @@ export const enqueueResearchTrack = async (req, res, playlistId, jobId, labelPre
   }
 
   const result = await playlistOperationQueue.enqueuePayload({
-    kind: "shared-playlist-research-track",
+    kind: "static-playlist-research-track",
     label: `${labelPrefix}:${playlistId}:track:${jobId}:research`,
     playlistId,
     jobId,

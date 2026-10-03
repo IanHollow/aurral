@@ -532,11 +532,11 @@ const loadPendingPlaylistImportHistory = async (user) => {
           AND state IN ('pending', 'processing')
         ORDER BY created_at ASC, id ASC
       `,
-      ["weekly-flow-operation"],
+      ["playlist-operation"],
     );
     return rows.flatMap((row) => {
       const payload = parseHonkerPayload(row?.payload);
-      if (payload?.kind !== "shared-playlist-create") return [];
+      if (payload?.kind !== "static-playlist-create") return [];
       if (
         user &&
         user.role !== "admin" &&
@@ -700,7 +700,7 @@ const syncFlowGenerationHistory = async (historyEntries = null) => {
     if (!flowId) continue;
     if (Date.now() - Number(entry.createdAt || 0) < STALE_AURRAL_JOB_MS) continue;
     const flowActive = await isHonkerQueueActive(
-      "weekly-flow-operation",
+      "playlist-operation",
       (payload) =>
         String(payload?.flowId || payload?.playlistId || "").trim() === flowId,
     );

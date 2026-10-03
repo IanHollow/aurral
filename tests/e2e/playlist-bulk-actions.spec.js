@@ -7,7 +7,7 @@ test("one bulk request reports partial completion against its original playlist"
   const tracks = [1, 2].map((id) => ({ id: `bulk-${id}`, artistName: "Disposable artist", trackName: `Bulk track ${id}`, status: "pending", playlistType: "bulk-source" }));
   const source = { id: "bulk-source", name: "Disposable bulk source", tracks, trackCount: 2 };
   const target = { id: "bulk-target", name: "Disposable bulk target", tracks: [], trackCount: 0 };
-  const status = { flows: [], sharedPlaylists: [source, target], worker: {}, capabilities: { unavailableSources: {} } };
+  const status = { flows: [], staticPlaylists: [source, target], worker: {}, capabilities: { unavailableSources: {} } };
   const submissions = [];
   let resultReads = 0;
   await page.route("**/api/**", (route) => (new URL(route.request().url()).pathname.startsWith("/api/")

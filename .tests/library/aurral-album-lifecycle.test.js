@@ -219,8 +219,8 @@ test("cancelling an Aurral album stops active work, cleans staging, and keeps fi
 
   try {
     const cancelled = await callRoute(
-      "POST /albums/aurral/:canonicalId/cancel",
-      { canonicalId: String(album.id) },
+      "POST /albums/aurral/:recordId/cancel",
+      { recordId: String(album.id) },
     );
     assert.equal(cancelled.statusCode, 200);
     assert.deepEqual(cancelled.body.cancelledJobIds.sort(), [downloadingJob, pendingJob].sort());
@@ -232,8 +232,8 @@ test("cancelling an Aurral album stops active work, cleans staging, and keeps fi
     assert.equal(downloadTracker.getNextPending(), null);
 
     const repeated = await callRoute(
-      "POST /albums/aurral/:canonicalId/cancel",
-      { canonicalId: String(album.id) },
+      "POST /albums/aurral/:recordId/cancel",
+      { recordId: String(album.id) },
     );
     assert.equal(repeated.statusCode, 200);
     assert.deepEqual(repeated.body.cancelledJobIds, []);
@@ -248,13 +248,13 @@ test("album cancellation rejects unknown, malformed, and Lidarr-managed albums",
   const { album: lidarrAlbum, jobFor } = createLibraryAlbum({ managedBy: "lidarr", availableTracks: 1 });
   const lidarrJob = jobFor(1);
 
-  const missing = await callRoute("POST /albums/aurral/:canonicalId/cancel", { canonicalId: "999999" });
+  const missing = await callRoute("POST /albums/aurral/:recordId/cancel", { recordId: "999999" });
   assert.equal(missing.statusCode, 404);
-  const malformed = await callRoute("POST /albums/aurral/:canonicalId/cancel", { canonicalId: "12abc" });
+  const malformed = await callRoute("POST /albums/aurral/:recordId/cancel", { recordId: "12abc" });
   assert.equal(malformed.statusCode, 400);
   const conflict = await callRoute(
-    "POST /albums/aurral/:canonicalId/cancel",
-    { canonicalId: String(lidarrAlbum.id) },
+    "POST /albums/aurral/:recordId/cancel",
+    { recordId: String(lidarrAlbum.id) },
   );
   assert.equal(conflict.statusCode, 409);
   assert.equal(conflict.body.code, "album_owner_conflict");
@@ -272,8 +272,8 @@ test("album cancellation waits on provider cleanup without reviving the job", as
   });
 
   const cancelled = await callRoute(
-    "POST /albums/aurral/:canonicalId/cancel",
-    { canonicalId: String(album.id) },
+    "POST /albums/aurral/:recordId/cancel",
+    { recordId: String(album.id) },
   );
   assert.equal(cancelled.statusCode, 200);
   assert.equal(cancelled.body.cleanupFailed, true);
@@ -338,8 +338,8 @@ test("album status aggregates library availability and per-track jobs", async ()
       });
 
       const response = await callRoute(
-        "GET /albums/aurral/:canonicalId/status",
-        { canonicalId: String(album.id) },
+        "GET /albums/aurral/:recordId/status",
+        { recordId: String(album.id) },
       );
       assert.equal(response.statusCode, 200, scenario.name);
       assert.equal(response.body.status, scenario.status, scenario.name);

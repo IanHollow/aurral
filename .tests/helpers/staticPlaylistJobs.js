@@ -8,9 +8,9 @@ export function addStaticPlaylistJobs({ downloadTracker, flowPlaylistConfig }, p
   const jobIds = tracks.map((track) => downloadTracker.addJob(track, "library", { queuedForPlaylist: true }));
   const nextTracks = flowPlaylistConfig.getStaticPlaylist(playlistId).tracks.map((track) => ({ ...track }));
   tracks.forEach((track, index) => {
-    const membership = nextTracks.find((entry) => !entry.canonicalJobId && sameTrack(entry, track));
-    if (membership) membership.canonicalJobId = jobIds[index];
-    else nextTracks.push({ ...track, canonicalJobId: jobIds[index] });
+    const membership = nextTracks.find((entry) => !entry.jobId && sameTrack(entry, track));
+    if (membership) membership.jobId = jobIds[index];
+    else nextTracks.push({ ...track, jobId: jobIds[index] });
   });
   flowPlaylistConfig.updateStaticPlaylist(playlistId, { tracks: nextTracks });
   return jobIds;

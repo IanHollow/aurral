@@ -184,7 +184,7 @@ export const normalizeSettings = (savedSettings) => {
         url: "",
         token: "",
         notifyDiscoveryUpdated: false,
-        notifyWeeklyFlowDone: false,
+        notifyFlowDone: false,
         notifyRequestMade: false,
         notifyRequestAvailable: false,
         ...(savedSettings.integrations?.gotify || {}),
@@ -192,7 +192,7 @@ export const normalizeSettings = (savedSettings) => {
       webhooks: savedSettings.integrations?.webhooks || [],
       webhookEvents: {
         notifyDiscoveryUpdated: false,
-        notifyWeeklyFlowDone: false,
+        notifyFlowDone: false,
         notifyRequestMade: false,
         notifyRequestAvailable: false,
         ...(savedSettings.integrations?.webhookEvents || {}),

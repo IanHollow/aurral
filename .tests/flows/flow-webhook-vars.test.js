@@ -34,7 +34,7 @@ test.beforeEach(() => {
     integrations: {},
     onboardingComplete: true,
     flows: [],
-    sharedPlaylists: [],
+    staticPlaylists: [],
   });
 });
 
@@ -70,7 +70,7 @@ test("flow completion sends display name and track library path", async () => {
     ...settings,
     integrations: {
       ...settings.integrations,
-      webhookEvents: { notifyWeeklyFlowDone: true },
+      webhookEvents: { notifyFlowDone: true },
       webhooks: [
         {
           url: `http://127.0.0.1:${port}/hook`,

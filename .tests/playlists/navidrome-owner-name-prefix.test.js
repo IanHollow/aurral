@@ -27,7 +27,7 @@ test.beforeEach(() => {
     integrations: {},
     onboardingComplete: true,
     flows: [],
-    sharedPlaylists: [],
+    staticPlaylists: [],
     playlistArtwork: { style: "aurral" },
   });
 });

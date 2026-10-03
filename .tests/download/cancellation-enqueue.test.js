@@ -85,7 +85,7 @@ const createFlow = ({ enabled = false, name } = {}) => {
 test.beforeEach(() => {
   resetDatabase(db);
   invalidateFlowPlaylistConfigCache();
-  dbOps.updateSettings({ integrations: {}, onboardingComplete: true, flows: [], sharedPlaylists: [] });
+  dbOps.updateSettings({ integrations: {}, onboardingComplete: true, flows: [], staticPlaylists: [] });
   downloadTracker.clearAll();
 });
 
@@ -97,7 +97,7 @@ test("a failed flow-delete enqueue restores active download work", async (t) => 
   const user = { id: 1, role: "user" };
   const flow = createFlow({ name: "Delete queue rollback" });
   const tokenScope = `flow:${flow.id}:mutation`;
-  const tokenKey = `weeklyFlowOperationTokens:${encodeURIComponent(tokenScope)}`;
+  const tokenKey = `playlistOperationTokens:${encodeURIComponent(tokenScope)}`;
   dbOps.setJSONSetting(tokenKey, "previous-delete-token");
   const generation = activatePlaylistDownloadGeneration(flow.id);
   const jobId = downloadTracker.addJob({ artistName: "Artist", trackName: "Song" }, flow.id);
@@ -119,7 +119,7 @@ test("a failed flow-disable enqueue restores enabled state and active downloads"
   const user = { id: 1, role: "user" };
   const flow = createFlow({ name: "Disable queue rollback", enabled: true });
   const tokenScope = `flow:${flow.id}:mutation`;
-  const tokenKey = `weeklyFlowOperationTokens:${encodeURIComponent(tokenScope)}`;
+  const tokenKey = `playlistOperationTokens:${encodeURIComponent(tokenScope)}`;
   dbOps.setJSONSetting(tokenKey, "previous-disable-token");
   const generation = activatePlaylistDownloadGeneration(flow.id);
   const jobId = downloadTracker.addJob({ artistName: "Artist", trackName: "Song" }, flow.id);
@@ -266,7 +266,7 @@ test("a failed shared-track delete enqueue clears only its new job-cancellation 
   });
   const response = createResponse();
 
-  await staticPlaylistHandlers.get("/shared-playlists/:playlistId/tracks/:jobId")({
+  await staticPlaylistHandlers.get("/static-playlists/:playlistId/tracks/:jobId")({
     params: { playlistId: playlist.id, jobId },
     user,
   }, response);
@@ -294,7 +294,7 @@ test("a failed static playlist delete restores only the downloads it cancelled",
   });
   const response = createResponse();
 
-  await staticPlaylistHandlers.get("/shared-playlists/:playlistId")({
+  await staticPlaylistHandlers.get("/static-playlists/:playlistId")({
     params: { playlistId: playlist.id },
     user,
   }, response);
@@ -321,7 +321,7 @@ test("a failed track-delete enqueue preserves an existing job-cancellation marke
   });
   const response = createResponse();
 
-  await staticPlaylistHandlers.get("/shared-playlists/:playlistId/tracks/:jobId")({
+  await staticPlaylistHandlers.get("/static-playlists/:playlistId/tracks/:jobId")({
     params: { playlistId: playlist.id, jobId },
     user,
   }, response);

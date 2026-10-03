@@ -11,7 +11,7 @@ const [state, { db }, { dbOps }, { flowPlaylistConfig }, { downloadTracker }, ho
 test.beforeEach(() => {
   resetDatabase(db);
   downloadTracker.clearAll();
-  dbOps.updateSettings({ integrations: {}, flows: [], sharedPlaylists: [] });
+  dbOps.updateSettings({ integrations: {}, flows: [], staticPlaylists: [] });
   honker.getPipelineQueue();
   db.prepare("DELETE FROM _honker_live WHERE queue = 'slskd-pipeline'").run();
 });

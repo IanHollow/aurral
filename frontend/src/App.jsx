@@ -263,7 +263,7 @@ function AppContent() {
                       <Route
                         path="/library/playlists"
                         element={
-                          <PermissionRoute permission="accessFlow">
+                          <PermissionRoute permission="accessPlaylists">
                             <PlaylistsPage />
                           </PermissionRoute>
                         }
@@ -271,7 +271,7 @@ function AppContent() {
                       <Route
                         path="/library/playlists/:playlistId"
                         element={
-                          <PermissionRoute permission="accessFlow">
+                          <PermissionRoute permission="accessPlaylists">
                             <PlaylistDetailPage />
                           </PermissionRoute>
                         }
@@ -282,7 +282,7 @@ function AppContent() {
                       <Route
                         path="/flows"
                         element={
-                          <PermissionRoute permission="accessFlow">
+                          <PermissionRoute permission="accessPlaylists">
                             <FlowsPage />
                           </PermissionRoute>
                         }
@@ -290,7 +290,7 @@ function AppContent() {
                       <Route
                         path="/flows/:flowId"
                         element={
-                          <PermissionRoute permission="accessFlow">
+                          <PermissionRoute permission="accessPlaylists">
                             <FlowDetailPage />
                           </PermissionRoute>
                         }
@@ -298,7 +298,7 @@ function AppContent() {
                       <Route
                         path="/playlists"
                         element={
-                          <PermissionRoute permission="accessFlow">
+                          <PermissionRoute permission="accessPlaylists">
                             <PlaylistRedirect />
                           </PermissionRoute>
                         }

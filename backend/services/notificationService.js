@@ -264,7 +264,7 @@ export async function notifyFlowDone(playlistType, stats = {}, flowPath = "", fl
   const failed = stats.failed ?? 0;
   const displayName = String(flowName || playlistType || "").trim() || playlistType;
   const tasks = [];
-  if (gotify.notifyWeeklyFlowDone) {
+  if (gotify.notifyFlowDone) {
     tasks.push(
       queueGotify(
         "Aurral – Flow",
@@ -274,7 +274,7 @@ export async function notifyFlowDone(playlistType, stats = {}, flowPath = "", fl
     );
   }
   tasks.push(
-    queueWebhooks(settings.integrations, "notifyWeeklyFlowDone", {
+    queueWebhooks(settings.integrations, "notifyFlowDone", {
       flowPath,
       flowName: displayName,
     }),

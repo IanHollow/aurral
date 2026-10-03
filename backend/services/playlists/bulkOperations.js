@@ -62,7 +62,7 @@ export async function processStaticPlaylistBulkOperation(operationId) {
         rejected.push(job
           ? { jobId: selection.jobId, status: "failed", message: "The selected membership changed. Select the track again." }
           : { jobId: selection.jobId, status: "alreadyAbsent" });
-      } else if (target && job && target.tracks.some((track) => tracksShareMembership(track, job) && track.canonicalJobId !== job.id)) {
+      } else if (target && job && target.tracks.some((track) => tracksShareMembership(track, job) && track.jobId !== job.id)) {
         rejected.push({ jobId: selection.jobId, status: "failed", message: "The destination already contains a separate membership for this track. The source was kept." });
       } else if (target && job && isArtistBlockedForUser(target.ownerUserId, job)) {
         rejected.push({ jobId: selection.jobId, status: "failed", message: "The destination owner has blocked this artist." });
@@ -70,14 +70,14 @@ export async function processStaticPlaylistBulkOperation(operationId) {
     }
     if (target && eligible.length) {
       const tracks = eligible
-        .map((selection) => lockedSource.tracks.find((track) => track.canonicalJobId === selection.jobId))
+        .map((selection) => lockedSource.tracks.find((track) => track.jobId === selection.jobId))
         .filter(Boolean)
         .map(({ membershipId: _membershipId, ...track }) => track);
       target = persistMembership(() => {
         const result = creatingTarget
           ? flowPlaylistConfig.createStaticPlaylist({ id: target.id, name: target.name, ownerUserId: user.id, tracks })
           : flowPlaylistConfig.appendStaticPlaylistTracks(target.id, tracks);
-        if (!result || !tracks.every((track) => result.tracks.some((entry) => entry.canonicalJobId === track.canonicalJobId))) {
+        if (!result || !tracks.every((track) => result.tracks.some((entry) => entry.jobId === track.jobId))) {
           throw new Error("Could not persist destination membership");
         }
         record.synchronization[target.id] = false;
@@ -88,7 +88,7 @@ export async function processStaticPlaylistBulkOperation(operationId) {
     const removedJobIds = new Set(eligible.map((selection) => selection.jobId));
     await commitStaticPlaylistTracks({
       playlistId: source.id,
-      tracks: lockedSource.tracks.filter((track) => !removedJobIds.has(track.canonicalJobId)),
+      tracks: lockedSource.tracks.filter((track) => !removedJobIds.has(track.jobId)),
       deleteFiles: record.action === "remove",
       onCommitted(outcomes) {
         record.outcomes.push(...rejected, ...outcomes.map((outcome) => ({ ...outcome,

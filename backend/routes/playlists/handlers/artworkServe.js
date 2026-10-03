@@ -10,10 +10,10 @@ export function registerArtworkServe(router) {
         .status(401)
         .json({ error: "Unauthorized", message: "Authentication required" });
     }
-    if (req.user && !hasPermission(req.user, "accessFlow")) {
+    if (req.user && !hasPermission(req.user, "accessPlaylists")) {
       return res
         .status(403)
-        .json({ error: "Forbidden", message: "Permission required: accessFlow" });
+        .json({ error: "Forbidden", message: "Permission required: accessPlaylists" });
     }
 
     const { playlistId } = req.params;

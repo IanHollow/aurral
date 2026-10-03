@@ -55,7 +55,7 @@ import {
   withStaticPlaylistRelease,
 } from "./staticPlaylistJobs.js";
 
-const OPERATION_TOKENS_KEY = "weeklyFlowOperationTokens";
+const OPERATION_TOKENS_KEY = "playlistOperationTokens";
 const operationTokenKey = (scope) =>
   `${OPERATION_TOKENS_KEY}:${encodeURIComponent(scope)}`;
 
@@ -73,10 +73,7 @@ export function markLatestPlaylistOperationToken(scope, token) {
 export function getLatestPlaylistOperationToken(scope) {
   const safeScope = String(scope || "").trim();
   if (!safeScope) return null;
-  const current = dbOps.getJSONSetting(operationTokenKey(safeScope));
-  if (current != null) return current;
-  const legacy = dbOps.getJSONSetting(OPERATION_TOKENS_KEY) || {};
-  return legacy[safeScope] ?? null;
+  return dbOps.getJSONSetting(operationTokenKey(safeScope)) ?? null;
 }
 
 export function restorePlaylistOperationToken({ scope, token, previousToken } = {}) {
@@ -404,7 +401,7 @@ async function createStaticPlaylistLocked({
   await finishStaticPlaylistChange(playlistId, {
     tracksQueued: linked.tracksQueued,
     tracksReused: linked.tracksReused,
-    enrichment: normalizedTracks.length ? "shared-playlist-create" : null,
+    enrichment: normalizedTracks.length ? "static-playlist-create" : null,
   });
   return {
     success: true,
@@ -437,7 +434,7 @@ async function appendStaticPlaylistTracksLocked({ playlistId, tracks = [] } = {}
   await finishStaticPlaylistChange(safePlaylistId, {
     tracksQueued: linked.tracksQueued,
     tracksReused: linked.tracksReused,
-    enrichment: "shared-playlist-append",
+    enrichment: "static-playlist-append",
   });
   return {
     success: true,
@@ -454,13 +451,13 @@ function keepExistingMemberships(currentTracks, nextTracks, matchKeys) {
   const result = nextTracks.map((track) => ({ ...track }));
   for (const buildKey of matchKeys) {
     for (const track of result) {
-      if (track.canonicalJobId) continue;
+      if (track.jobId) continue;
       const key = buildKey(track);
       if (!key) continue;
-      const index = available.findIndex((entry) => entry.canonicalJobId && buildKey(entry) === key);
+      const index = available.findIndex((entry) => entry.jobId && buildKey(entry) === key);
       if (index < 0) continue;
       const [entry] = available.splice(index, 1);
-      track.canonicalJobId = entry.canonicalJobId;
+      track.jobId = entry.jobId;
       track.membershipId = entry.membershipId;
       matched += 1;
     }
@@ -506,7 +503,7 @@ export async function updateStaticPlaylist({
   } else {
     const normalizedTracks = filterBlockedPlaylistTracks(
       currentPlaylist.ownerUserId,
-      normalizeTrackList(tracks).map(({ canonicalJobId: _jobId, ...track }) => track),
+      normalizeTrackList(tracks).map(({ jobId: _jobId, ...track }) => track),
     );
     await withStaticPlaylistRelease([safePlaylistId], async () => {
       const lockedPlaylist = flowPlaylistConfig.getStaticPlaylist(safePlaylistId);
@@ -548,7 +545,7 @@ export async function updateStaticPlaylist({
     recordPlaylistHistory(safePlaylistId, { tracksQueued });
   }
   schedulePlaylistMbidEnrichment(safePlaylistId, {
-    reason: hasTracksUpdate ? "shared-playlist-track-update" : "shared-playlist-update",
+    reason: hasTracksUpdate ? "static-playlist-track-update" : "static-playlist-update",
     priority: 5,
   });
   return { success: true, playlist, tracksQueued, tracksReused };
@@ -571,7 +568,7 @@ async function deleteStaticPlaylistTrack({ playlistId, jobId } = {}) {
     if (!staticPlaylistReferencesJob(lockedPlaylist, safeJobId)) return;
     ({ playlist: updatedPlaylist } = await commitStaticPlaylistTracks({
       playlistId: safePlaylistId,
-      tracks: lockedPlaylist.tracks.filter((track) => track.canonicalJobId !== safeJobId),
+      tracks: lockedPlaylist.tracks.filter((track) => track.jobId !== safeJobId),
       deleteFiles: true,
       requireAll: true,
     }));
@@ -752,7 +749,7 @@ async function deleteStaticPlaylist({ playlistId } = {}) {
 export async function processPlaylistOperation(payload = {}) {
   const kind = String(payload?.kind || payload?.type || "").trim();
   return withHonkerLock(
-    "weekly-flow-operation",
+    "playlist-operation",
     async () => {
       switch (kind) {
         case "manual-start-flow":
@@ -776,23 +773,23 @@ export async function processPlaylistOperation(payload = {}) {
           return resetPlaylists(payload);
         case "adopt-flow-seed":
           return adoptFlowSeed(payload);
-        case "shared-playlist-create":
+        case "static-playlist-create":
           return createStaticPlaylist(payload);
-        case "shared-playlist-append-tracks":
+        case "static-playlist-append-tracks":
           return appendStaticPlaylistTracks(payload);
-        case "shared-playlist-update":
+        case "static-playlist-update":
           return updateStaticPlaylist(payload);
-        case "shared-playlist-bulk": {
+        case "static-playlist-bulk": {
           const { processStaticPlaylistBulkOperation } = await import("./bulkOperations.js");
           return processStaticPlaylistBulkOperation(payload.operationId);
         }
-        case "shared-playlist-delete-track":
+        case "static-playlist-delete-track":
           return deleteStaticPlaylistTrack(payload);
-        case "shared-playlist-research-track":
+        case "static-playlist-research-track":
           return researchPlaylistTrack(payload);
         case "library-track-research":
           return researchLibraryTrack(payload);
-        case "shared-playlist-delete":
+        case "static-playlist-delete":
           return deleteStaticPlaylist(payload);
         default:
           throw new Error(`Unknown playlist operation: ${kind || "unknown"}`);

@@ -30,7 +30,7 @@ let root;
 
 test.beforeEach(async () => {
   resetDatabase(db);
-  dbOps.updateSettings({ integrations: {}, flows: [], sharedPlaylists: [] });
+  dbOps.updateSettings({ integrations: {}, flows: [], staticPlaylists: [] });
   root = await mkdtemp(path.join(tmpdir(), "aurral-flow-library-"));
 });
 

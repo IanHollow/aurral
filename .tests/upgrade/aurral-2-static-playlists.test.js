@@ -52,13 +52,13 @@ test("deleting a migrated playlist removes what it queued and keeps tracks used 
   const [downloaded] = jobsNamed("Downloaded");
   const libraryDone = jobsNamed("Library Done").map((job) => job.id).sort();
 
-  await processPlaylistOperation({ kind: "shared-playlist-delete", playlistId: imported.id });
+  await processPlaylistOperation({ kind: "static-playlist-delete", playlistId: imported.id });
 
   assert.equal(flowPlaylistConfig.getStaticPlaylist(imported.id), null);
   for (const name of ["Queued", "Failed", "Only In Jobs"]) assert.deepEqual(jobsNamed(name), [], name);
   assert.equal(await fileExists("Extra Artist/Extra Album/Only In Jobs.flac"), false);
 
-  assert.equal(flowPlaylistConfig.getStaticPlaylist(copied.id).tracks[0].canonicalJobId, downloaded.id);
+  assert.equal(flowPlaylistConfig.getStaticPlaylist(copied.id).tracks[0].jobId, downloaded.id);
   assert.equal(downloadTracker.getJob(downloaded.id)?.status, "done");
   assert.equal(await fileExists("Imp Artist/Imp Album/Downloaded.flac"), true);
   assert.deepEqual(jobsNamed("Library Done").map((job) => job.id).sort(), libraryDone);

@@ -106,7 +106,7 @@ const entityGenres = (entity) => {
 };
 
 const visibleFlows = (user) =>
-  user && hasPermission(user, "accessFlow") ? flowPlaylistConfig.getFlowsForUser(user) : [];
+  user && hasPermission(user, "accessPlaylists") ? flowPlaylistConfig.getFlowsForUser(user) : [];
 
 const findAlbumForTrack = (library, track) => {
   const relation = track?.albums?.[0];
@@ -796,9 +796,9 @@ const ensureLibraryJob = (track, createdJobIds = null, { forPlaylist = false } =
   return jobId;
 };
 
-const toLibraryPlaylistTrack = (track, canonicalJobId) => ({
+const toLibraryPlaylistTrack = (track, jobId) => ({
   ...track,
-  canonicalJobId: String(canonicalJobId || "").trim() || null,
+  jobId: String(jobId || "").trim() || null,
 });
 
 const refreshSubsonicPlaylist = (playlistId) => {
@@ -825,8 +825,8 @@ const linkPlaylistTracksToLibrary = (tracks, createdJobIds = null) => {
   for (const track of Array.isArray(tracks) ? tracks : []) {
     const candidate = normalizePlaylistTrack(track);
     if (!candidate) continue;
-    const existingJob = candidate.canonicalJobId
-      ? downloadTracker.getJob(candidate.canonicalJobId)
+    const existingJob = candidate.jobId
+      ? downloadTracker.getJob(candidate.jobId)
       : null;
     const jobId = existingJob && isSameTrack(existingJob, candidate)
       ? existingJob.id
@@ -871,7 +871,7 @@ const replaceSubsonicPlaylistTracks = async (user, playlist, tracks, updates = {
 };
 
 export async function createSubsonicPlaylist(user, { name, songIds = [] } = {}) {
-  if (!hasPermission(user, "accessFlow")) return null;
+  if (!hasPermission(user, "accessPlaylists")) return null;
   const safeName = String(name || "").trim();
   if (!safeName) return null;
   const resolved = songIds.map((id) => resolveSubsonicTrack(user, id));
@@ -900,12 +900,12 @@ export async function updateSubsonicPlaylist(
   user,
   { playlistId, name, comment, songIdsToAdd = [], songIndexesToRemove = [] } = {},
 ) {
-  return withHonkerLock("weekly-flow-operation", async () => {
+  return withHonkerLock("playlist-operation", async () => {
     const playlist = flowPlaylistConfig.getStaticPlaylistForUser(
       user,
       normalizeStaticPlaylistId(playlistId),
     );
-    if (!playlist || !hasPermission(user, "accessFlow")) return null;
+    if (!playlist || !hasPermission(user, "accessPlaylists")) return null;
     const resolvedAdds = songIdsToAdd.map((id) => resolveSubsonicTrack(user, id));
     if (resolvedAdds.some((entry) => !entry)) return null;
     const removals = new Set(songIndexesToRemove);
@@ -926,9 +926,9 @@ export async function deleteSubsonicPlaylist(user, playlistId) {
     user,
     normalizeStaticPlaylistId(playlistId),
   );
-  if (!playlist || !hasPermission(user, "accessFlow")) return false;
+  if (!playlist || !hasPermission(user, "accessPlaylists")) return false;
   return processPlaylistOperation({
-    kind: "shared-playlist-delete",
+    kind: "static-playlist-delete",
     playlistId: playlist.id,
   });
 }

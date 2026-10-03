@@ -27,7 +27,7 @@ test.beforeEach(() => {
     integrations: {},
     onboardingComplete: true,
     flows: [],
-    sharedPlaylists: [],
+    staticPlaylists: [],
   });
 });
 
@@ -52,12 +52,12 @@ test("status snapshot includes static playlist summaries without embedding track
   addStaticPlaylistJobs({ downloadTracker, flowPlaylistConfig }, playlist.id, [tracks[0]]);
 
   const status = getPlaylistStatusSnapshot();
-  const shared = (status.sharedPlaylists || []).find((p) => p.id === playlist.id);
+  const shared = (status.staticPlaylists || []).find((p) => p.id === playlist.id);
 
   assert.ok(shared);
   assert.equal(shared.trackCount, 421);
   assert.equal(
-    getStaticPlaylistTrackCount(shared, status.sharedPlaylistStats[playlist.id]),
+    getStaticPlaylistTrackCount(shared, status.staticPlaylistStats[playlist.id]),
     421,
   );
   assert.equal("tracks" in shared, false);
@@ -76,7 +76,7 @@ test("status snapshot includes empty manual playlists", () => {
   });
 
   const status = getPlaylistStatusSnapshot();
-  const shared = (status.sharedPlaylists || []).find((p) => p.id === playlist.id);
+  const shared = (status.staticPlaylists || []).find((p) => p.id === playlist.id);
 
   assert.ok(shared);
   assert.equal(shared.name, "Manual Empty");
@@ -97,7 +97,7 @@ test("status snapshot trackIdentities includes pending download jobs", async () 
   assert.ok(jobId);
 
   const status = getPlaylistStatusSnapshot();
-  const shared = (status.sharedPlaylists || []).find((p) => p.id === playlist.id);
+  const shared = (status.staticPlaylists || []).find((p) => p.id === playlist.id);
   const job = downloadTracker.getJob(jobId);
 
   assert.ok(shared);
@@ -120,11 +120,11 @@ test("status snapshot trackCount includes failed download jobs", async () => {
   downloadTracker.setFailed(jobId, "Not found");
 
   const status = getPlaylistStatusSnapshot();
-  const shared = status.sharedPlaylists.find((entry) => entry.id === playlist.id);
+  const shared = status.staticPlaylists.find((entry) => entry.id === playlist.id);
 
   assert.equal(shared.trackCount, 1);
   assert.equal(
-    getStaticPlaylistTrackCount(shared, status.sharedPlaylistStats[playlist.id]),
+    getStaticPlaylistTrackCount(shared, status.staticPlaylistStats[playlist.id]),
     1,
   );
 });

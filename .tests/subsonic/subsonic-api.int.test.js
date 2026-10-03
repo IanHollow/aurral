@@ -593,7 +593,7 @@ test("creates durable Subsonic playlists around one promoted library job", async
   assert.equal(first.name, "Subsonic Keep One");
   const jobIdFromSong = (songId) =>
     decodeURIComponent(songId.slice("shared-song:".length)).split(":").at(-1);
-  const canonicalJobId = jobIdFromSong(first.entry[0].id);
+  const jobId = jobIdFromSong(first.entry[0].id);
 
   const secondCreate = responseJson(await request("createPlaylist", {
     name: "Subsonic Keep Two",
@@ -606,11 +606,11 @@ test("creates durable Subsonic playlists around one promoted library job", async
   const secondAurralPlaylistId = decodeURIComponent(
     secondCreate.playlist.id.slice("shared:".length),
   );
-  assert.equal(jobIdFromSong(second.entry[0].id), canonicalJobId);
+  assert.equal(jobIdFromSong(second.entry[0].id), jobId);
 
   await waitFor(() => db.prepare(
     "SELECT status FROM playlist_download_jobs WHERE id = ?",
-  ).get(canonicalJobId)?.status === "done");
+  ).get(jobId)?.status === "done");
   const firstReady = await waitFor(async () => {
     const result = responseJson(await request("getPlaylist", { id: first.id }));
     return result.playlist?.entry?.[0];
@@ -632,10 +632,10 @@ test("creates durable Subsonic playlists around one promoted library job", async
   assert.equal(aurralJobsResponse.status, 200);
   const aurralJobs = await aurralJobsResponse.json();
   assert.equal(aurralJobs.length, 1);
-  assert.equal(aurralJobs[0].id, canonicalJobId);
+  assert.equal(aurralJobs[0].id, jobId);
   assert.equal(aurralJobs[0].playlistType, aurralPlaylistId);
   assert.equal(
-    (await apiFetch(`/api/playlists/stream/${encodeURIComponent(canonicalJobId)}`)).status,
+    (await apiFetch(`/api/playlists/stream/${encodeURIComponent(jobId)}`)).status,
     200,
   );
 
@@ -647,7 +647,7 @@ test("creates durable Subsonic playlists around one promoted library job", async
   const secondEntry = responseJson(await request("getPlaylist", { id: second.id })).playlist.entry[0];
   assert.equal((await request("stream", { id: secondEntry.id })).response.status, 200);
   const removeLibraryTrackResponse = await apiFetch(
-    `/api/playlists/shared-playlists/${encodeURIComponent(secondAurralPlaylistId)}/tracks/${encodeURIComponent(canonicalJobId)}`,
+    `/api/playlists/static-playlists/${encodeURIComponent(secondAurralPlaylistId)}/tracks/${encodeURIComponent(jobId)}`,
     { method: "DELETE" },
   );
   assert.equal(removeLibraryTrackResponse.status, 200);
@@ -821,7 +821,7 @@ test("playlist favorites resolve to the owned library track", async () => {
     })).artist.album[0];
     librarySongId = responseJson(await request("getAlbum", { id: album.id })).album.song[0].id;
     const page = await (await apiFetch(
-      "/api/library/canonical?kind=tracks&page=1&pageSize=100&availableOnly=true",
+      "/api/library/records?kind=tracks&page=1&pageSize=100&availableOnly=true",
     )).json();
     assert.equal(page.items.find((track) => track.title === "Canonical Song").userFavorite, true);
 
@@ -902,13 +902,13 @@ test("streams library files through the authenticated native route", async () =>
   const { token } = await login.json();
   const headers = { Authorization: `Bearer ${token}` };
   const canonical = await fetch(
-    `http://127.0.0.1:${aurral.port}/api/library/canonical?source=lidarr&availableOnly=true&kind=tracks&page=1&pageSize=100`,
+    `http://127.0.0.1:${aurral.port}/api/library/records?source=lidarr&availableOnly=true&kind=tracks&page=1&pageSize=100`,
     { headers },
   );
   const library = await canonical.json();
   const albumId = library.tracks[0].albums[0].albumId;
   const tracks = await fetch(
-    `http://127.0.0.1:${aurral.port}/api/library/tracks?readPath=canonical&source=lidarr&albumId=${albumId}`,
+    `http://127.0.0.1:${aurral.port}/api/library/tracks?readPath=records&source=lidarr&albumId=${albumId}`,
     { headers },
   );
   const track = (await tracks.json())[0];

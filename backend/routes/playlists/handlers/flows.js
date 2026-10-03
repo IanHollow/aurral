@@ -417,7 +417,7 @@ export function registerFlows(router) {
       for (const [index, job] of uniqueCompletedJobs.entries()) {
         const libraryJob = findLibraryJob(tracks[index]);
         if (libraryJob && libraryJob.status !== "failed") {
-          linkedTracks.push({ ...tracks[index], canonicalJobId: libraryJob.id });
+          linkedTracks.push({ ...tracks[index], jobId: libraryJob.id });
           continue;
         }
         const safeSourcePath = path.resolve(job.finalPath);
@@ -429,7 +429,7 @@ export function registerFlows(router) {
         if (!jobId) continue;
         createdJobIds.push(jobId);
         downloadTracker.setDone(jobId, safeSourcePath, job.albumName || null);
-        linkedTracks.push({ ...tracks[index], canonicalJobId: jobId });
+        linkedTracks.push({ ...tracks[index], jobId });
       }
       playlist = flowPlaylistConfig.updateStaticPlaylist(playlist.id, { tracks: linkedTracks });
 

@@ -149,23 +149,46 @@ test("static playlist jobs move into the Library and their tracks reference them
     const upgradeJob = db.prepare("SELECT playlist_id, playlist_type, queued_for_playlist FROM playlist_download_jobs WHERE upgrade_for_job_id IS NOT NULL").get();
     assert.deepEqual(upgradeJob, { playlist_id: "library", playlist_type: "quality-upgrade", queued_for_playlist: 0 });
 
-    const playlists = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'sharedPlaylists'").pluck().get());
+    const playlists = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'staticPlaylists'").pluck().get());
     const imported = playlists.find((playlist) => playlist.name === "Imported");
     const jobIdFor = (name) => db.prepare("SELECT id FROM playlist_download_jobs WHERE track_name = ? AND upgrade_for_job_id IS NULL AND queued_for_playlist = 1").pluck().get(name);
     assert.deepEqual(
-      imported.tracks.map((track) => [track.trackName, Boolean(track.canonicalJobId)]),
+      imported.tracks.map((track) => [track.trackName, Boolean(track.jobId)]),
       [["Downloaded", true], ["Queued", true], ["Failed", true], ["Library Done", true], ["Only In Jobs", true]],
     );
-    assert.equal(imported.tracks[0].canonicalJobId, jobIdFor("Downloaded"));
+    assert.equal(imported.tracks[0].jobId, jobIdFor("Downloaded"));
     assert.equal(new Set(imported.tracks.map((track) => track.membershipId)).size, 5);
     const copied = playlists.find((playlist) => playlist.name === "Copied");
-    assert.equal(copied.tracks[0].canonicalJobId, jobIdFor("Downloaded"));
+    assert.equal(copied.tracks[0].jobId, jobIdFor("Downloaded"));
 
     const pipeline = db.prepare("SELECT payload FROM _honker_live WHERE queue = 'slskd-pipeline'").pluck().all().map((payload) => JSON.parse(payload));
     assert.deepEqual(pipeline.map((payload) => [payload.jobId, payload.playlistId]), [[jobIdFor("Queued"), "library"]]);
     assert.deepEqual(db.prepare("SELECT job_id, playlist_id FROM weekly_flow_download_provider_work").all(), [{ job_id: jobIdFor("Queued"), playlist_id: "library" }]);
     const flowId = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'flows'").pluck().get())[0].id;
     assert.deepEqual(db.prepare("SELECT playlist_id FROM weekly_flow_download_cancellations ORDER BY playlist_id").pluck().all(), [flowId]);
+  } finally {
+    db.close();
+  }
+});
+
+test("queued work, permissions, and notification settings move to their current names", () => {
+  const { db } = upgrade("stamped");
+  try {
+    const operations = db.prepare("SELECT queue, payload FROM _honker_live WHERE queue != 'slskd-pipeline' ORDER BY id").all()
+      .map((row) => [row.queue, JSON.parse(row.payload).kind]);
+    assert.deepEqual(operations, [["playlist-operation", "static-playlist-update"], ["system-task", "file-reuse-repair"]]);
+    assert.deepEqual(
+      db.prepare("SELECT key, value FROM settings WHERE key GLOB '*OperationTokens*' ORDER BY key").all(),
+      [{ key: "playlistOperationTokens:flow%3A2c860b40-aa75-46bc-90e1-a02c8af0bb7d", value: '"fixture-flow-token"' }],
+    );
+    for (const permissions of db.prepare("SELECT permissions FROM users").pluck().all()) {
+      assert.equal(Object.hasOwn(JSON.parse(permissions), "accessFlow"), false);
+      assert.equal(typeof JSON.parse(permissions).accessPlaylists, "boolean");
+    }
+    const integrations = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'integrations'").pluck().get());
+    assert.equal(integrations.gotify.notifyFlowDone, true);
+    assert.equal(integrations.webhookEvents.notifyFlowDone, true);
+    assert.equal(JSON.stringify(integrations).includes("notifyWeeklyFlowDone"), false);
   } finally {
     db.close();
   }
