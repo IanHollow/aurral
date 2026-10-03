@@ -16,15 +16,15 @@ import { formatDateTime } from "../../utils/dateTime.js";
 import { useSearchParams } from "react-router";
 import { PageSectionMobileNav } from "../../components/PageSectionMobileNav";
 import {
-  getAllFlowJobs,
+  getDownloadJobs,
   reSearchFlowTrack,
   reSearchAllMissingTracks,
-  reSearchSharedPlaylistTrack,
+  reSearchStaticPlaylistTrack,
   searchTrackUpgrade,
   searchAllUpgrades,
 } from "../../utils/api/endpoints/playlists.js";
 import { queryClient, queryKeys } from "../../queryClient.js";
-import { usePlaylistStatusQuery } from "../flows/usePlaylistStatusQuery.js";
+import { usePlaylistStatusQuery } from "../playlists/usePlaylistStatusQuery.js";
 import { buildWantedPath, WANTED_VIEWS } from "../../navigation/activityNavConfig";
 import ActivityToolbar from "./ActivityToolbar";
 import ActivityInfoModal from "./ActivityInfoModal";
@@ -181,7 +181,7 @@ export default function ActivityMissingPage() {
   const jobsQueryKey = queryKeys.playlistJobs();
   const jobsQuery = useQuery({
     queryKey: jobsQueryKey,
-    queryFn: ({ signal }) => getAllFlowJobs({ signal }),
+    queryFn: ({ signal }) => getDownloadJobs({ signal }),
     staleTime: 15_000,
   });
   const statusQuery = usePlaylistStatusQuery();
@@ -276,7 +276,7 @@ export default function ActivityMissingPage() {
       if (isMissing) {
         const playlist = playlistInfo.get(String(job.playlistType));
         const reSearch = playlist?.kind === "playlist"
-          ? reSearchSharedPlaylistTrack
+          ? reSearchStaticPlaylistTrack
           : reSearchFlowTrack;
         await reSearch(job.playlistType, job.id);
         queryClient.setQueryData(jobsQueryKey, (current) =>

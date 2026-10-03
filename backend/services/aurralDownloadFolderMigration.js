@@ -10,21 +10,21 @@ import {
   scanMusicRoot,
 } from "./libraryFileScanner.js";
 import { getLibraryMediaFile } from "./libraryMediaStore.js";
-import { downloadTracker } from "./weeklyFlow/weeklyFlowDownloadTracker.js";
-import { flowPlaylistConfig } from "./weeklyFlow/weeklyFlowPlaylistConfig.js";
+import { downloadTracker } from "./downloadJobs/downloadTracker.js";
+import { flowPlaylistConfig } from "./playlists/flowPlaylistConfig.js";
 import {
-  PLAYLIST_LIBRARY_DIR,
+  PLAYLIST_FILES_DIR,
   buildAurralTrackDestination,
   isPathInsideRoot,
   remapLegacyPath,
-  resolvePlaylistRoot,
-} from "./playlistPaths.js";
-import { sanitizePathPart } from "./playlistDownloadUtils.js";
+  resolveDownloadRoot,
+} from "./downloadPaths.js";
+import { sanitizePathPart } from "./downloadUtils.js";
 
 export const AURRAL_DOWNLOAD_FOLDER_MIGRATION_VERSION = 1;
 export const AURRAL_DOWNLOAD_FOLDER_MIGRATION_SETTING = "aurralDownloadFolderMigration";
 
-const LEGACY_PLAYLIST_ROOTS = [PLAYLIST_LIBRARY_DIR, "aurral-playlists"];
+const LEGACY_PLAYLIST_ROOTS = [PLAYLIST_FILES_DIR, "aurral-playlists"];
 const PLAYBACK_RETENTION_REASON = "retained for playback playlist protection";
 const PARTIAL_EXTENSIONS = new Set([
   ".crdownload",
@@ -464,18 +464,18 @@ function resolveOwnership(sourcePath, rootPath, jobs, knownIds) {
     .map((job) => jobPlaylistId(job))
     .filter(Boolean);
   const playlistIds = [...new Set([...candidates, pathPlaylistId].filter(Boolean))];
-  const sharedId = playlistIds.find((id) => flowPlaylistConfig.getSharedPlaylist(id)) || null;
+  const sharedId = playlistIds.find((id) => flowPlaylistConfig.getStaticPlaylist(id)) || null;
   const flowId = playlistIds.find((id) => flowPlaylistConfig.getFlow(id)) || null;
   const playlistId = sharedId || flowId || pathPlaylistId;
   return {
     playlistId,
-    sharedPlaylist: playlistId ? flowPlaylistConfig.getSharedPlaylist(playlistId) : null,
+    staticPlaylist: playlistId ? flowPlaylistConfig.getStaticPlaylist(playlistId) : null,
     flow: !sharedId && flowId ? flowPlaylistConfig.getFlow(flowId) : null,
   };
 }
 
 export async function migrateAurralDownloadFolder(options = {}) {
-  const rootPath = path.resolve(options.root || resolvePlaylistRoot());
+  const rootPath = path.resolve(options.root || resolveDownloadRoot());
   const logger = options.logger || console;
   const lidarrRoots = configuredLidarrRoots(options);
   if (lidarrRoots.some((candidate) => pathsOverlap(rootPath, candidate))) {
@@ -506,7 +506,7 @@ export async function migrateAurralDownloadFolder(options = {}) {
   const knownIds = new Set([
     ...jobs.map(jobPlaylistId).filter(Boolean),
     ...flowPlaylistConfig.getFlows().map((flow) => String(flow.id)),
-    ...flowPlaylistConfig.getSharedPlaylists().map((playlist) => String(playlist.id)),
+    ...flowPlaylistConfig.getStaticPlaylists().map((playlist) => String(playlist.id)),
   ]);
   const files = await collectLegacyFiles(rootPath, knownIds);
   const fileSet = new Set(files);
@@ -564,13 +564,13 @@ export async function migrateAurralDownloadFolder(options = {}) {
       continue;
     }
 
-    const { playlistId, flow, sharedPlaylist } = resolveOwnership(
+    const { playlistId, flow, staticPlaylist } = resolveOwnership(
       sourcePath,
       rootPath,
       jobsForSource,
       knownIds,
     );
-    if (!playlistId || (!flow && !sharedPlaylist)) {
+    if (!playlistId || (!flow && !staticPlaylist)) {
       retainItem(state, sourcePath, "ambiguous playlist ownership", logger);
       result.retained += 1;
       continue;

@@ -12,10 +12,10 @@ const [
   libraryStore,
   managementStore,
   { downloadTracker },
-  { weeklyFlowWorker },
+  { downloadWorker },
   { lidarrClient },
   { libraryManager },
-  { getCanonicalLibraryForAlbumIds },
+  { getLibraryForAlbumIds },
   { recordMissingTrackSearch },
   { runMissingTrackSearch },
   { SCHEDULED_SYSTEM_TASKS },
@@ -27,8 +27,8 @@ const [
   "backend/db/helpers/index.js",
   "backend/services/libraryMediaStore.js",
   "backend/services/libraryManagementStore.js",
-  "backend/services/weeklyFlow/weeklyFlowDownloadTracker.js",
-  "backend/services/weeklyFlow/weeklyFlowWorker.js",
+  "backend/services/downloadJobs/downloadTracker.js",
+  "backend/services/downloadJobs/downloadWorker.js",
   "backend/services/lidarrClient.js",
   "backend/services/libraryManager.js",
   "backend/services/libraryQueryService.js",
@@ -181,7 +181,7 @@ const originalLidarr = {
   getArtist: lidarrClient.getArtist,
   getArtistByMbid: lidarrClient.getArtistByMbid,
 };
-const originalWorkerStart = weeklyFlowWorker.start;
+const originalWorkerStart = downloadWorker.start;
 
 test.before(() => {
   setDownloadSourceConfigured(true);
@@ -193,7 +193,7 @@ test.before(() => {
       throw new Error("Lidarr must not be called");
     };
   }
-  weeklyFlowWorker.start = async () => {};
+  downloadWorker.start = async () => {};
 });
 
 test.beforeEach(() => {
@@ -210,7 +210,7 @@ test.beforeEach(() => {
 
 test.after(async () => {
   Object.assign(lidarrClient, originalLidarr);
-  weeklyFlowWorker.start = originalWorkerStart;
+  downloadWorker.start = originalWorkerStart;
   dbOps.updateSettings(originalSettings);
   await cleanupIsolatedState(isolatedState);
 });
@@ -410,7 +410,7 @@ test("a library rescan keeps a track unmonitored, and the Library reports it", (
     metadata: { rescanned: true },
   });
 
-  const library = getCanonicalLibraryForAlbumIds({ ids: [album.id] });
+  const library = getLibraryForAlbumIds({ ids: [album.id] });
   const monitoredById = new Map(library.tracks.map((track) => [track.id, track.monitored]));
   assert.equal(monitoredById.get(tracks[0].id), false);
   assert.equal(monitoredById.get(tracks[1].id), true);
@@ -444,7 +444,7 @@ test("scanning an album's downloaded file keeps the album monitored and searched
 
   assert.equal(await runMissingTrackSearch(), 1);
   assert.deepEqual(albumJobs(albumMbid).map((job) => job.trackMbid), [tracks[1].mbid]);
-  assert.equal(getCanonicalLibraryForAlbumIds({ ids: [album.id] }).albums[0].monitored, true);
+  assert.equal(getLibraryForAlbumIds({ ids: [album.id] }).albums[0].monitored, true);
 });
 
 test("searching an album leaves cancelled tracks alone, including an older cancelled job", async () => {

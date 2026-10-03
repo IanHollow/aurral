@@ -16,10 +16,10 @@ const [
   libraryStore,
   managementStore,
   { downloadTracker },
-  { weeklyFlowWorker },
+  { downloadWorker },
   { lidarrClient },
   { libraryManager },
-  { getCanonicalLibraryForAlbumIds },
+  { getLibraryForAlbumIds },
   { scanMusicRoot },
   { clearMetadataProviderCaches },
   { registerAlbums },
@@ -30,8 +30,8 @@ const [
   "backend/db/helpers/index.js",
   "backend/services/libraryMediaStore.js",
   "backend/services/libraryManagementStore.js",
-  "backend/services/weeklyFlow/weeklyFlowDownloadTracker.js",
-  "backend/services/weeklyFlow/weeklyFlowWorker.js",
+  "backend/services/downloadJobs/downloadTracker.js",
+  "backend/services/downloadJobs/downloadWorker.js",
   "backend/services/lidarrClient.js",
   "backend/services/libraryManager.js",
   "backend/services/libraryQueryService.js",
@@ -130,7 +130,7 @@ async function scanFile(index, { downloadedByAurral, albumTitle = "Playlist Albu
 
 const albumState = () => {
   const albumId = db.prepare("SELECT id FROM library_albums WHERE release_group_mbid = ?").get(albumMbid).id;
-  const library = getCanonicalLibraryForAlbumIds({ ids: [albumId] });
+  const library = getLibraryForAlbumIds({ ids: [albumId] });
   const monitoredByMbid = Object.fromEntries(library.tracks.map((track) => [track.mbid, track.monitored]));
   return { albumId, album: library.albums[0], monitored: trackMbids.map((mbid) => monitoredByMbid[mbid]) };
 };
@@ -143,7 +143,7 @@ const queuedTrackMbids = () =>
 
 const originalSettings = dbOps.getSettings();
 const originalLidarrConfigured = lidarrClient.isConfigured;
-const originalWorkerStart = weeklyFlowWorker.start;
+const originalWorkerStart = downloadWorker.start;
 
 test.before(() => {
   dbOps.updateSettings({
@@ -160,12 +160,12 @@ test.before(() => {
   });
   clearMetadataProviderCaches();
   lidarrClient.isConfigured = () => false;
-  weeklyFlowWorker.start = async () => {};
+  downloadWorker.start = async () => {};
 });
 
 test.after(async () => {
   lidarrClient.isConfigured = originalLidarrConfigured;
-  weeklyFlowWorker.start = originalWorkerStart;
+  downloadWorker.start = originalWorkerStart;
   dbOps.updateSettings(originalSettings);
   await metadataServer.close();
   await cleanupIsolatedState(isolatedState);
@@ -215,7 +215,7 @@ test("downloading a missing track of an unmonitored Aurral album monitors and qu
   const { albumId } = albumState();
   await libraryManager.setAurralAlbumMonitoring(albumId, { monitored: false });
   const missing = albumState().album.trackIds
-    .map((id) => getCanonicalLibraryForAlbumIds({ ids: [albumId] }).tracks.find((track) => track.id === id))
+    .map((id) => getLibraryForAlbumIds({ ids: [albumId] }).tracks.find((track) => track.id === id))
     .find((track) => track.mbid === trackMbids[2]);
 
   const response = await callRoute("POST /downloads/track", {

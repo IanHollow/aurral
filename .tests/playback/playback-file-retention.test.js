@@ -11,10 +11,10 @@ const [state, { db }, { dbOps }, retention, { playlistManager }, { downloadTrack
   "backend/config/db-sqlite.js",
   "backend/db/helpers/index.js",
   "backend/services/playback/playbackFileRetention.js",
-  "backend/services/weeklyFlow/weeklyFlowPlaylistManager.js",
-  "backend/services/weeklyFlow/weeklyFlowDownloadTracker.js",
-  "backend/services/weeklyFlow/weeklyFlowFileReuse.js",
-  "backend/services/weeklyFlow/weeklyFlowPlaylistConfig.js",
+  "backend/services/playlists/playlistManager.js",
+  "backend/services/downloadJobs/downloadTracker.js",
+  "backend/services/downloadJobs/fileReuse.js",
+  "backend/services/playlists/flowPlaylistConfig.js",
 );
 const { createPlaybackDeletionGuard, removeUnusedPlaybackFiles, isPlaybackRetainedFile, retryPlaybackRetainedFiles } = retention;
 const root = process.env.WEEKLY_FLOW_FOLDER;
@@ -277,7 +277,7 @@ for (const mode of ["completed-flow", "shared-direct", "shared-batch", "shared-b
       const isFlow = mode === "completed-flow";
       const playlist = isFlow
         ? flowPlaylistConfig.createFlow({ name: `${mode}-${usage}`, enabled: true })
-        : flowPlaylistConfig.createSharedPlaylist({ name: `${mode}-${usage}` });
+        : flowPlaylistConfig.createStaticPlaylist({ name: `${mode}-${usage}` });
       const source = await makeFile(`aurral-weekly-flow/${playlist.id}/Artist/Album/Saved.flac`);
       const destinationPath = isFlow
         ? path.join(root, "_flows", playlist.id, "Artist/Album/Saved.flac")

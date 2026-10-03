@@ -7,19 +7,19 @@ import {
 } from "../core.js";
 import { queryClient, queryKeys } from "../../../queryClient.js";
 
-export const getFlowTrackStreamUrl = (jobId) =>
+export const getPlaylistTrackStreamUrl = (jobId) =>
   buildAuthenticatedApiUrl(`/playlists/stream/${encodeURIComponent(jobId)}`);
 
 export const getStagingStreamUrl = (jobId) =>
   buildAuthenticatedApiUrl(`/playlists/staging-stream/${encodeURIComponent(jobId)}`);
 
-export const getFlowArtworkUrl = (playlistId, version = "current") =>
+export const getPlaylistArtworkUrl = (playlistId, version = "current") =>
   buildAuthenticatedApiUrl(
     `/playlists/artwork/${encodeURIComponent(playlistId)}`,
     { v: version },
   );
 
-export const uploadFlowArtwork = (playlistId, file) =>
+export const uploadPlaylistArtwork = (playlistId, file) =>
   putData(
     `/playlists/artwork/${encodeURIComponent(playlistId)}`,
     file,
@@ -30,17 +30,17 @@ export const uploadFlowArtwork = (playlistId, file) =>
     },
   );
 
-export const deleteFlowArtwork = (playlistId) =>
+export const deletePlaylistArtwork = (playlistId) =>
   deleteData(
     `/playlists/artwork/${encodeURIComponent(playlistId)}`,
   );
 
-export const generateFlowArtwork = (playlistId) =>
+export const generatePlaylistArtwork = (playlistId) =>
   postData(
     `/playlists/artwork/${encodeURIComponent(playlistId)}/generate`,
   );
 
-export const getFlowStatus = ({ signal, bypassCache = false } = {}) => {
+export const getPlaylistStatus = ({ signal, bypassCache = false } = {}) => {
   if (bypassCache) return getData("/playlists/status", { signal });
   return queryClient.fetchQuery({
     queryKey: queryKeys.playlistStatus,
@@ -49,22 +49,22 @@ export const getFlowStatus = ({ signal, bypassCache = false } = {}) => {
   });
 };
 
-export const getFlowJobs = (flowId, limit = null, options = {}) => {
+export const getPlaylistJobs = (playlistId, limit = null, options = {}) => {
   const params = { ...(options.params || {}) };
   const parsedLimit = Number(limit);
   if (Number.isFinite(parsedLimit) && parsedLimit > 0) {
     params.limit = Math.floor(parsedLimit);
   }
-  return getData(`/playlists/jobs/${flowId}`, {
+  return getData(`/playlists/jobs/${playlistId}`, {
     ...options,
     params,
   });
 };
 
-export const getAllFlowJobs = (options = {}) =>
+export const getDownloadJobs = (options = {}) =>
   getData("/playlists/jobs", options);
 
-export const getFlowJobFiles = (jobId, options = {}) =>
+export const getJobFiles = (jobId, options = {}) =>
   getData(`/playlists/jobs/${encodeURIComponent(jobId)}/files`, options);
 
 export const getManualMissingSearchSources = (jobId, { mode = "missing", playlistId = null } = {}) =>
@@ -107,7 +107,7 @@ export const convertFlowToStaticPlaylist = (flowId, payload = {}) =>
     payload,
   );
 
-export const createSharedPlaylist = (payload) =>
+export const createStaticPlaylist = (payload) =>
   postData("/playlists/shared-playlists", payload);
 
 export const setFlowEnabled = (flowId, enabled) =>
@@ -115,13 +115,13 @@ export const setFlowEnabled = (flowId, enabled) =>
     enabled,
   });
 
-export const importSharedPlaylist = (payload) =>
+export const importStaticPlaylist = (payload) =>
   postData(
     "/playlists/shared-playlists/import",
     payload,
   );
 
-export const updateSharedPlaylist = (playlistId, payload) =>
+export const updateStaticPlaylist = (playlistId, payload) =>
   putData(
     `/playlists/shared-playlists/${playlistId}`,
     payload,
@@ -133,23 +133,23 @@ export const setPlaylistTrackAvailability = (playlistId, enabled) =>
 export const setPlaylistRecordHistory = (playlistId, enabled) =>
   putData(`/playlists/shared-playlists/${encodeURIComponent(playlistId)}/record-history`, { enabled });
 
-export const addSharedPlaylistTracks = (playlistId, payload) =>
+export const addStaticPlaylistTracks = (playlistId, payload) =>
   postData(
     `/playlists/shared-playlists/${playlistId}/tracks`,
     payload,
   );
 
-export const deleteSharedPlaylist = (playlistId) =>
+export const deleteStaticPlaylist = (playlistId) =>
   deleteData(
     `/playlists/shared-playlists/${playlistId}`,
   );
 
-export const deleteSharedPlaylistTrack = (playlistId, jobId) =>
+export const deleteStaticPlaylistTrack = (playlistId, jobId) =>
   deleteData(
     `/playlists/shared-playlists/${playlistId}/tracks/${jobId}`,
   );
 
-export const reSearchSharedPlaylistTrack = (playlistId, jobId) =>
+export const reSearchStaticPlaylistTrack = (playlistId, jobId) =>
   postData(
     `/playlists/shared-playlists/${playlistId}/tracks/${jobId}/research`,
   );
@@ -172,7 +172,7 @@ export const approveBlockedJob = (jobId) =>
 export const denyBlockedJob = (jobId) =>
   postData(`/playlists/jobs/${jobId}/deny`);
 
-export const startFlowPlaylist = (flowId, limit = 30) =>
+export const startFlow = (flowId, limit = 30) =>
   postData(`/playlists/start/${flowId}`, {
     limit,
   });
@@ -227,7 +227,7 @@ export const previewYoutubeMusicPlaylist = (url) =>
 export const importYoutubeMusicPlaylist = (payload) =>
   postData("/playlists/import/youtube-music", payload, { timeout: 5 * 60 * 1000 });
 
-export const syncSharedPlaylistImport = (playlistId) =>
+export const syncStaticPlaylistImport = (playlistId) =>
   postData(`/playlists/shared-playlists/${encodeURIComponent(playlistId)}/sync`, undefined, {
     timeout: 5 * 60 * 1000,
   });
@@ -235,11 +235,11 @@ export const syncSharedPlaylistImport = (playlistId) =>
 export const getFlowLidarrImportListUrl = (flowId) =>
   getData(`/playlists/flows/${encodeURIComponent(flowId)}/lidarr-import-list`);
 
-export const removeSharedPlaylistTracks = (playlistId, jobIds) =>
+export const removeStaticPlaylistTracks = (playlistId, jobIds) =>
   postData(`/playlists/shared-playlists/${encodeURIComponent(playlistId)}/track-removals`, { jobIds });
 
-export const moveSharedPlaylistTracks = (playlistId, jobIds, target) =>
+export const moveStaticPlaylistTracks = (playlistId, jobIds, target) =>
   postData(`/playlists/shared-playlists/${encodeURIComponent(playlistId)}/track-moves`, { jobIds, target });
 
-export const getSharedPlaylistOperation = (playlistId, operationId, options) =>
+export const getStaticPlaylistOperation = (playlistId, operationId, options) =>
   getData(`/playlists/shared-playlists/${encodeURIComponent(playlistId)}/operations/${encodeURIComponent(operationId)}`, options);

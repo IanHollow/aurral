@@ -19,8 +19,8 @@ const [isolatedState, { db }, { dbOps, userOps }, { hashPassword }, { indexLidar
     "backend/db/helpers/index.js",
     "backend/middleware/passwordHash.js",
     "backend/services/libraryLidarrIndexer.js",
-    "backend/services/weeklyFlow/weeklyFlowPlaylistConfig.js",
-    "backend/services/weeklyFlow/weeklyFlowDownloadTracker.js",
+    "backend/services/playlists/flowPlaylistConfig.js",
+    "backend/services/downloadJobs/downloadTracker.js",
   );
 
 const spec = JSON.parse(
@@ -119,7 +119,7 @@ test.before(async () => {
     },
   });
 
-  const playlist = flowPlaylistConfig.createSharedPlaylist({
+  const playlist = flowPlaylistConfig.createStaticPlaylist({
     name: "Schema Playlist",
     ownerUserId: alice.id,
     tracks: [{ artistName: "Schema Artist", albumName: "Schema Album", trackName: "Schema Song", durationMs: 10_000 }],

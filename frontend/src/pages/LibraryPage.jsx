@@ -46,7 +46,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useAudioQueue } from "../contexts/audioQueueContext";
 import { useToast } from "../contexts/ToastContext";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
-import { useSharedPlaylists } from "../hooks/useSharedPlaylists";
+import { useStaticPlaylists } from "../hooks/useStaticPlaylists";
 import { useDiscoverNavigation } from "../hooks/useDiscoverNavigation";
 import { useWebSocketChannel } from "../hooks/useWebSocket";
 import {
@@ -54,15 +54,15 @@ import {
   getReleaseGroupTracks,
 } from "../utils/api/endpoints/artists.js";
 import {
-  clearCanonicalLibraryPageCache,
+  clearLibraryPageCache,
   deleteAlbumFromLibrary,
   deleteArtistFromLibrary,
   deleteAurralAlbumFromLibrary,
   deleteLidarrAlbumFromLibrary,
   deleteTrackFromLibrary,
-  fetchCanonicalLibraryPage,
+  fetchLibraryPage,
   getActiveLibraryRefresh,
-  getCanonicalLibraryPage,
+  getLibraryPage,
   getDownloadStatus,
   getLibraryFavorites,
   getLibraryRefreshStatus,
@@ -75,9 +75,9 @@ import {
   updateLibraryFavorites,
 } from "../utils/api/endpoints/library.js";
 import {
-  addSharedPlaylistTracks,
-  createSharedPlaylist,
-  deleteSharedPlaylistTrack,
+  addStaticPlaylistTracks,
+  createStaticPlaylist,
+  deleteStaticPlaylistTrack,
 } from "../utils/api/endpoints/playlists.js";
 import { buildAuthenticatedApiUrl } from "../utils/api/core.js";
 import { mergeAlbumMetadataTracks } from "../utils/libraryTrackHydration.js";
@@ -121,7 +121,7 @@ import { DeleteTrackModal } from "./ArtistDetails/components/DeleteTrackModal";
 import LibraryInfoModal from "./LibraryInfoModal";
 import ArtistMbidModal from "./ArtistMbidModal";
 import {
-  buildSharedPlaylistTrackPayload,
+  buildStaticPlaylistTrackPayload,
   reserveUniquePlaylistName,
 } from "./ArtistDetails/utils";
 import { useResponsiveReleaseLimit } from "./ArtistDetails/hooks/useResponsiveReleaseLimit";
@@ -335,13 +335,13 @@ function LibraryPage() {
   const { bootstrap, hasPermission, user } = useAuth();
   const { showError, showSuccess } = useToast();
   const {
-    sharedPlaylists,
-    setSharedPlaylists,
+    staticPlaylists,
+    setStaticPlaylists,
     playlistsLoading,
     playlistsError,
     setPlaylistsError,
-    loadSharedPlaylists,
-  } = useSharedPlaylists();
+    loadStaticPlaylists,
+  } = useStaticPlaylists();
   const { playQueue, currentTrack, isPlaying, isLoading, togglePlayPause, matchesSource } =
     useAudioQueue();
   const [query, setQuery] = useState("");
@@ -371,12 +371,12 @@ function LibraryPage() {
 
   const handleLibraryScanMessage = useCallback((message) => {
     if (message?.type !== "library_scan_completed") return;
-    clearCanonicalLibraryPageCache();
+    clearLibraryPageCache();
     queryClient.invalidateQueries({
       queryKey: queryKeys.libraryAlbumTracksPrefix,
       refetchType: "none",
     });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.libraryCanonicalPrefix });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.libraryPagePrefix });
     void queryClient.invalidateQueries({ queryKey: queryKeys.libraryViewPrefix });
   }, []);
 
@@ -389,12 +389,12 @@ function LibraryPage() {
   }, []);
 
   const completeLibraryRefresh = useCallback(() => {
-    clearCanonicalLibraryPageCache();
+    clearLibraryPageCache();
     queryClient.invalidateQueries({
       queryKey: queryKeys.libraryAlbumTracksPrefix,
       refetchType: "none",
     });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.libraryCanonicalPrefix });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.libraryPagePrefix });
     void queryClient.invalidateQueries({ queryKey: queryKeys.libraryViewPrefix });
   }, []);
 
@@ -446,7 +446,7 @@ function LibraryPage() {
     refreshAttemptRef.current = attempt;
     setRefreshing(true);
     try {
-      clearCanonicalLibraryPageCache();
+      clearLibraryPageCache();
       const queued = await requestLibraryRefresh(mode);
       const jobId = queued?.jobId;
       if (!jobId) throw new Error("Library refresh did not start");
@@ -560,7 +560,7 @@ function LibraryPage() {
     queryFn: async ({ signal }) => {
       const nextData = isDetail
         ? routeAlbumId
-          ? await fetchCanonicalLibraryPage({
+          ? await fetchLibraryPage({
               kind: "tracks",
               albumId: routeAlbumId,
               page: 1,
@@ -570,14 +570,14 @@ function LibraryPage() {
               availableOnly: false,
             }, { signal })
           : await Promise.all([
-              fetchCanonicalLibraryPage({
+              fetchLibraryPage({
                 kind: "albums",
                 artistId: routeArtistId,
                 page: 1,
                 pageSize,
                 availableOnly: true,
               }, { signal }),
-              fetchCanonicalLibraryPage({
+              fetchLibraryPage({
                 kind: "tracks",
                 artistId: routeArtistId,
                 page: 1,
@@ -589,7 +589,7 @@ function LibraryPage() {
           ? await getLibraryFavorites({ signal })
           : section === "home"
             ? await Promise.all([
-                fetchCanonicalLibraryPage({
+                fetchLibraryPage({
                   kind: "albums",
                   page: 1,
                   pageSize,
@@ -597,7 +597,7 @@ function LibraryPage() {
                   // "Recently added" defers to the Lidarr "available only"
                   // setting (omitted param) like the Albums/Artists tabs.
                 }, { signal }),
-                fetchCanonicalLibraryPage({
+                fetchLibraryPage({
                   kind: "tracks",
                   page: 1,
                   pageSize: 12,
@@ -605,7 +605,7 @@ function LibraryPage() {
                   availableOnly: true,
                 }, { signal }),
               ])
-            : await fetchCanonicalLibraryPage({
+            : await fetchLibraryPage({
                 kind: tab,
                 page: pageIndex,
                 pageSize,
@@ -719,7 +719,7 @@ function LibraryPage() {
     const result = await queryClient.fetchQuery({
       queryKey: queryKeys.libraryAlbumTracks(String(album.id), releaseGroupMbid),
       queryFn: async ({ signal }) => {
-        const page = await getCanonicalLibraryPage({
+        const page = await getLibraryPage({
           kind: "tracks",
           albumId: album.id,
           page: 1,
@@ -779,17 +779,17 @@ function LibraryPage() {
   const getDefaultTrackPlaylistName = useCallback(
     (track) =>
       reserveUniquePlaylistName(
-        sharedPlaylists,
+        staticPlaylists,
         `${getArtistForAlbum(getAlbumForTrack(track))?.name || track?.artistName || "Artist"} Picks`,
       ),
-    [getAlbumForTrack, getArtistForAlbum, sharedPlaylists],
+    [getAlbumForTrack, getArtistForAlbum, staticPlaylists],
   );
 
   const addLibraryTrackToPlaylist = useCallback(
     async (track, target) => {
       const album = getAlbumForTrack(track);
       const artist = getArtistForAlbum(album);
-      const payload = buildSharedPlaylistTrackPayload({
+      const payload = buildStaticPlaylistTrackPayload({
         artistName: artist?.name || track?.artistName || "",
         trackName: track?.title || "",
         albumName: album?.title || "",
@@ -811,17 +811,17 @@ function LibraryPage() {
           const name =
             String(target?.name || "").trim() ||
             getDefaultTrackPlaylistName(track);
-          await createSharedPlaylist({ name, tracks: [payload] });
+          await createStaticPlaylist({ name, tracks: [payload] });
           showSuccess(`Track saved to ${name}`);
         } else {
-          const playlist = sharedPlaylists.find(
+          const playlist = staticPlaylists.find(
             (candidate) => candidate.id === target?.playlistId,
           );
-          await addSharedPlaylistTracks(target?.playlistId, { tracks: [payload] });
+          await addStaticPlaylistTracks(target?.playlistId, { tracks: [payload] });
           showSuccess(`Track added to ${playlist?.name || "playlist"}`);
         }
-        const nextPlaylists = await loadSharedPlaylists();
-        if (nextPlaylists) setSharedPlaylists(nextPlaylists);
+        const nextPlaylists = await loadStaticPlaylists();
+        if (nextPlaylists) setStaticPlaylists(nextPlaylists);
       } catch (requestError) {
         const message =
           requestError.response?.data?.message ||
@@ -838,10 +838,10 @@ function LibraryPage() {
       getAlbumForTrack,
       getArtistForAlbum,
       getDefaultTrackPlaylistName,
-      loadSharedPlaylists,
+      loadStaticPlaylists,
       setPlaylistsError,
-      setSharedPlaylists,
-      sharedPlaylists,
+      setStaticPlaylists,
+      staticPlaylists,
       showError,
       showSuccess,
     ],
@@ -854,14 +854,14 @@ function LibraryPage() {
       setPlaylistSavingKey(key);
       setPlaylistsError("");
       try {
-        const result = await deleteSharedPlaylistTrack(target.playlistId, target.jobId);
+        const result = await deleteStaticPlaylistTrack(target.playlistId, target.jobId);
         showSuccess(
           result?.queued
             ? `Removal queued for ${track?.title || "track"}`
             : `Removed ${track?.title || "track"} from playlist`,
         );
-        const nextPlaylists = await loadSharedPlaylists();
-        if (nextPlaylists) setSharedPlaylists(nextPlaylists);
+        const nextPlaylists = await loadStaticPlaylists();
+        if (nextPlaylists) setStaticPlaylists(nextPlaylists);
       } catch (requestError) {
         const message =
           requestError.response?.data?.message ||
@@ -874,7 +874,7 @@ function LibraryPage() {
         setPlaylistSavingKey("");
       }
     },
-    [loadSharedPlaylists, setPlaylistsError, setSharedPlaylists, showError, showSuccess],
+    [loadStaticPlaylists, setPlaylistsError, setStaticPlaylists, showError, showSuccess],
   );
 
   const canDeleteArtist = hasPermission("deleteArtist");
@@ -929,12 +929,12 @@ function LibraryPage() {
         tracks: current.tracks.filter((track) => String(track.id) !== entityId),
       };
     });
-    clearCanonicalLibraryPageCache();
+    clearLibraryPageCache();
     queryClient.invalidateQueries({
       queryKey: queryKeys.libraryAlbumTracksPrefix,
       refetchType: "none",
     });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.libraryCanonicalPrefix });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.libraryPagePrefix });
     void queryClient.invalidateQueries({ queryKey: queryKeys.libraryViewPrefix });
   }, [setLibrary]);
 
@@ -1004,8 +1004,8 @@ function LibraryPage() {
   ]);
 
   const refreshLibraryArtistMonitoring = useCallback(() => {
-    clearCanonicalLibraryPageCache();
-    void queryClient.invalidateQueries({ queryKey: queryKeys.libraryCanonicalPrefix });
+    clearLibraryPageCache();
+    void queryClient.invalidateQueries({ queryKey: queryKeys.libraryPagePrefix });
     return queryClient.invalidateQueries({ queryKey: queryKeys.libraryViewPrefix });
   }, []);
 
@@ -1375,8 +1375,8 @@ function LibraryPage() {
             : entry,
         ),
       }));
-      clearCanonicalLibraryPageCache();
-      void queryClient.invalidateQueries({ queryKey: queryKeys.libraryCanonicalPrefix });
+      clearLibraryPageCache();
+      void queryClient.invalidateQueries({ queryKey: queryKeys.libraryPagePrefix });
       void queryClient.invalidateQueries({ queryKey: queryKeys.libraryViewPrefix });
       refreshLibraryActivity();
     },
@@ -1398,7 +1398,7 @@ function LibraryPage() {
       queryClient.setQueriesData({ queryKey: queryKeys.libraryAlbumTracksPrefix }, (data) =>
         Array.isArray(data?.tracks) ? { ...data, tracks: data.tracks.map(mark) } : data,
       );
-      clearCanonicalLibraryPageCache();
+      clearLibraryPageCache();
       void queryClient.invalidateQueries({ queryKey: queryKeys.libraryViewPrefix });
       refreshLibraryActivity();
     },
@@ -2028,14 +2028,14 @@ function LibraryPage() {
           menu: {
             items: trackMenuItems,
             additionalItemsAfter: "play",
-            onMenuOpen: loadSharedPlaylists,
+            onMenuOpen: loadStaticPlaylists,
             renderAdditionalItems: ({ closeMenu }) => (
               <>
                 <div className="native-library-item-menu__separator" />
                 <TrackPlaylistSubmenu
                   label="Add to playlist"
                   track={track}
-                  playlists={sharedPlaylists}
+                  playlists={staticPlaylists}
                   loading={playlistsLoading}
                   saving={playlistSavingKey === String(track.id)}
                   error={playlistsError}
@@ -2046,7 +2046,7 @@ function LibraryPage() {
                 />
                 <TrackPlaylistRemoveSubmenu
                   track={track}
-                  playlists={sharedPlaylists}
+                  playlists={staticPlaylists}
                   saving={playlistSavingKey === String(track.id)}
                   error={playlistsError}
                   onSelect={(target) => removeLibraryTrackFromPlaylist(track, target)}

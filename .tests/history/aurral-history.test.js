@@ -21,7 +21,7 @@ const {
   recordTrackJobQueued,
 } = historyModule;
 const { downloadTracker } = await importFromRepo(
-  "backend/services/weeklyFlow/weeklyFlowDownloadTracker.js",
+  "backend/services/downloadJobs/downloadTracker.js",
 );
 const { upsertLibraryArtist, upsertLibraryAlbum, upsertLibraryTrack, linkLibraryAlbumTrack } = await importFromRepo("backend/services/libraryMediaStore.js");
 const { getHonkerDb } = await importFromRepo("backend/services/honkerDb.js");
@@ -423,7 +423,7 @@ test("blocked track download history falls back to staging basename", async () =
 
 test("cancelled album track downloads show as cancelled, never as failed", async () => {
   const { cancelDownloadJobs } = await importFromRepo(
-    "backend/services/weeklyFlow/weeklyFlowDownloadCancellation.js",
+    "backend/services/downloadJobs/downloadCancellation.js",
   );
   const jobId = downloadTracker.addJob(
     {
@@ -466,7 +466,7 @@ test("cancelled album track downloads show as cancelled, never as failed", async
   assert.equal(downloadTracker.getJob(jobId)?.status, "cancelled");
 });
 
-test("Aurral album requests are not checked against Lidarr by canonical album ID", async (t) => {
+test("Aurral album requests are not checked against Lidarr by library album ID", async (t) => {
   const lidarrAlbumLookups = [];
   const lidarrStub = {
     isConfigured: () => true,

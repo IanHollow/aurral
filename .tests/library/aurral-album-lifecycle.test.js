@@ -17,11 +17,11 @@ const [
   { lidarrClient },
   { dbOps },
   { libraryManager },
-  { weeklyFlowWorker },
+  { downloadWorker },
 ] = await setupIsolatedBackend(
   "aurral-album-lifecycle",
-  "backend/services/weeklyFlow/weeklyFlowDownloadTracker.js",
-  "backend/services/weeklyFlow/weeklyFlowDownloadCancellation.js",
+  "backend/services/downloadJobs/downloadTracker.js",
+  "backend/services/downloadJobs/downloadCancellation.js",
   "backend/services/libraryMediaStore.js",
   "backend/services/libraryManagementStore.js",
   "backend/routes/library/handlers/albums.js",
@@ -30,10 +30,10 @@ const [
   "backend/services/lidarrClient.js",
   "backend/db/helpers/index.js",
   "backend/services/libraryManager.js",
-  "backend/services/weeklyFlow/weeklyFlowWorker.js",
+  "backend/services/downloadJobs/downloadWorker.js",
 );
 
-const { downloadTracker, WeeklyFlowDownloadTracker } = trackerModule;
+const { downloadTracker, DownloadTracker } = trackerModule;
 
 const routes = new Map();
 const route = (method) => (routePath, ...handlers) => {
@@ -62,7 +62,7 @@ async function callRoute(key, params = {}, body = {}, query = {}) {
 }
 
 let albumSequence = 0;
-function createCanonicalAlbum({ managedBy = "aurral", trackCount = 3, availableTracks = 0 } = {}) {
+function createLibraryAlbum({ managedBy = "aurral", trackCount = 3, availableTracks = 0 } = {}) {
   albumSequence += 1;
   const suffix = String(albumSequence).padStart(12, "0");
   const artistMbid = `bbbbbbbb-bbbb-4bbb-8bbb-${suffix}`;
@@ -152,7 +152,7 @@ test("restart returns interrupted album jobs to pending and never revives cancel
   downloadTracker.setCancelRequested(cancelRequested);
   downloadTracker.setCancelled(cancelled);
 
-  const restarted = new WeeklyFlowDownloadTracker();
+  const restarted = new DownloadTracker();
   const expected = {
     [pending]: "pending",
     [interrupted]: "pending",
@@ -206,7 +206,7 @@ test("cancelling an Aurral album stops active work, cleans staging, and keeps fi
     lidarrCalls.push(args);
     throw new Error("Lidarr must not be called");
   };
-  const { album, jobFor } = createCanonicalAlbum({ availableTracks: 1 });
+  const { album, jobFor } = createLibraryAlbum({ availableTracks: 1 });
   const doneJob = jobFor(0);
   downloadTracker.setDone(doneJob, path.join(isolatedState.dataDir, "done.flac"), album.title);
   const downloadingJob = jobFor(1);
@@ -245,7 +245,7 @@ test("cancelling an Aurral album stops active work, cleans staging, and keeps fi
 });
 
 test("album cancellation rejects unknown, malformed, and Lidarr-managed albums", async () => {
-  const { album: lidarrAlbum, jobFor } = createCanonicalAlbum({ managedBy: "lidarr", availableTracks: 1 });
+  const { album: lidarrAlbum, jobFor } = createLibraryAlbum({ managedBy: "lidarr", availableTracks: 1 });
   const lidarrJob = jobFor(1);
 
   const missing = await callRoute("POST /albums/aurral/:canonicalId/cancel", { canonicalId: "999999" });
@@ -263,7 +263,7 @@ test("album cancellation rejects unknown, malformed, and Lidarr-managed albums",
 });
 
 test("album cancellation waits on provider cleanup without reviving the job", async () => {
-  const { album, jobFor } = createCanonicalAlbum();
+  const { album, jobFor } = createLibraryAlbum();
   const jobId = jobFor(0);
   downloadTracker.setDownloading(jobId);
   downloadTracker.updateDownloadMetadata(jobId, {
@@ -281,7 +281,7 @@ test("album cancellation waits on provider cleanup without reviving the job", as
 
   downloadTracker.setFailed(jobId, "late provider error");
   assert.equal(downloadTracker.getJob(jobId).status, "cancel_requested");
-  assert.equal(new WeeklyFlowDownloadTracker().getJob(jobId).status, "cancelled");
+  assert.equal(new DownloadTracker().getJob(jobId).status, "cancelled");
 });
 
 function setDownloadSourceConfigured(configured) {
@@ -297,7 +297,7 @@ function setDownloadSourceConfigured(configured) {
   });
 }
 
-test("album status aggregates canonical availability and per-track jobs", async () => {
+test("album status aggregates library availability and per-track jobs", async () => {
   const originalIsConfigured = lidarrClient.isConfigured;
   const originalRequest = lidarrClient.request;
   const lidarrCalls = [];
@@ -324,7 +324,7 @@ test("album status aggregates canonical availability and per-track jobs", async 
   try {
     for (const scenario of scenarios) {
       setDownloadSourceConfigured(scenario.sourceConfigured !== false);
-      const { album, jobFor } = createCanonicalAlbum({ availableTracks: scenario.availableTracks || 0 });
+      const { album, jobFor } = createLibraryAlbum({ availableTracks: scenario.availableTracks || 0 });
       scenario.jobs.forEach((jobStatus, index) => {
         if (!jobStatus) return;
         const jobId = jobFor(index);
@@ -350,7 +350,7 @@ test("album status aggregates canonical availability and per-track jobs", async 
     }
 
     setDownloadSourceConfigured(true);
-    const { album } = createCanonicalAlbum();
+    const { album } = createLibraryAlbum();
     const batch = await callRoute(
       "GET /downloads/status",
       {},
@@ -369,9 +369,9 @@ test("album status aggregates canonical availability and per-track jobs", async 
 });
 
 test("re-requesting an Aurral album waits for a download source and retries cancelled tracks in place", async () => {
-  const originalWorkerStart = weeklyFlowWorker.start;
-  weeklyFlowWorker.start = async () => {};
-  const { album, albumMbid, artistMbid } = createCanonicalAlbum();
+  const originalWorkerStart = downloadWorker.start;
+  downloadWorker.start = async () => {};
+  const { album, albumMbid, artistMbid } = createLibraryAlbum();
   const albumJobs = () => downloadTracker.getAll().filter((job) => job.albumMbid === albumMbid);
   const request = () =>
     libraryManager.addAlbum(artistMbid, albumMbid, album.title, { managedBy: "aurral" });
@@ -407,13 +407,13 @@ test("re-requesting an Aurral album waits for a download source and retries canc
     downloadTracker.setFailed(queued.jobIds[0], "Source failed after retry");
     assert.equal(downloadTracker.getJob(queued.jobIds[0]).status, "failed");
   } finally {
-    weeklyFlowWorker.start = originalWorkerStart;
+    downloadWorker.start = originalWorkerStart;
     setDownloadSourceConfigured(false);
   }
 });
 
 test("re-requesting a missing completed file reports a missing download source", async () => {
-  const { album, albumMbid, artistMbid, jobFor } = createCanonicalAlbum({ trackCount: 1 });
+  const { album, albumMbid, artistMbid, jobFor } = createLibraryAlbum({ trackCount: 1 });
   const jobId = jobFor(0);
   downloadTracker.setDone(jobId, path.join(isolatedState.dataDir, "deleted.flac"));
   setDownloadSourceConfigured(false);
@@ -446,13 +446,13 @@ test("active downloads list in-flight albums, artists, and tracks so buttons sur
   invalidateAllDownloadStatusesCache();
 
   try {
-    const queuedAlbum = createCanonicalAlbum();
+    const queuedAlbum = createLibraryAlbum();
     const downloadingTrack = queuedAlbum.jobFor(0);
     downloadTracker.setDownloading(downloadingTrack);
     queuedAlbum.jobFor(1);
     downloadTracker.setFailed(queuedAlbum.jobFor(2), "No matching source result");
 
-    const finishedAlbum = createCanonicalAlbum();
+    const finishedAlbum = createLibraryAlbum();
     downloadTracker.setCancelled(finishedAlbum.jobFor(0));
     downloadTracker.setDone(finishedAlbum.jobFor(1), path.join(isolatedState.dataDir, "done.flac"));
 

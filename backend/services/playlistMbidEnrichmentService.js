@@ -1,14 +1,14 @@
 import { enqueuePlaylistMbidEnrichmentJob } from "./honkerDb.js";
-import { downloadTracker } from "./weeklyFlow/weeklyFlowDownloadTracker.js";
-import { withPlaylistMutationLock } from "./weeklyFlow/weeklyFlowMutationGuards.js";
-import { playlistManager } from "./weeklyFlow/weeklyFlowPlaylistManager.js";
-import { resolveWeeklyFlowTrackContext } from "./weeklyFlow/weeklyFlowTrackResolver.js";
+import { downloadTracker } from "./downloadJobs/downloadTracker.js";
+import { withPlaylistMutationLock } from "./downloadJobs/mutationGuards.js";
+import { playlistManager } from "./playlists/playlistManager.js";
+import { resolveTrackSearchContext } from "./downloadJobs/trackSearchContext.js";
 import { mapWithConcurrency } from "./discovery/helpers.js";
 import {
   flowPlaylistConfig,
-  normalizeSharedTrack,
+  normalizePlaylistTrack,
   tracksShareMembership,
-} from "./weeklyFlow/weeklyFlowPlaylistConfig.js";
+} from "./playlists/flowPlaylistConfig.js";
 import { dbOps } from "../db/helpers/index.js";
 
 const PLAYLIST_MBID_ENRICHMENT_DELAY_SECONDS = 20;
@@ -97,7 +97,7 @@ function applyPlaylistTrackPatch(track, source) {
   const patch = mergeMissingMetadata(track, source);
   if (!hasPatch(patch)) return track;
   return (
-    normalizeSharedTrack({
+    normalizePlaylistTrack({
       ...track,
       ...patch,
     }) || track
@@ -132,7 +132,7 @@ async function buildResolution(track, jobs, resolveTrackContext, reconcileArtist
     return null;
   }
 
-  const originalTrack = normalizeSharedTrack(track);
+  const originalTrack = normalizePlaylistTrack(track);
   if (!originalTrack) return null;
 
   const resolvedTrack = await Promise.resolve()
@@ -195,7 +195,7 @@ export function schedulePlaylistMbidEnrichmentForMissingPlaylists({
     Number(dbOps.getJSONSetting(ARTIST_MBID_RECONCILIATION_KEY) || 0) <
       ARTIST_MBID_RECONCILIATION_VERSION;
   const jobIds = [];
-  for (const playlist of flowPlaylistConfig.getSharedPlaylists()) {
+  for (const playlist of flowPlaylistConfig.getStaticPlaylists()) {
     const jobs = downloadTracker.getByPlaylistType(playlist.id);
     const hasMissingConfig = hasMissingPlaylistMbids(playlist);
     const hasMissingJobs = (Array.isArray(playlist?.tracks) ? playlist.tracks : []).some((track) =>
@@ -224,17 +224,17 @@ export function schedulePlaylistMbidEnrichmentForMissingPlaylists({
   return jobIds;
 }
 
-export async function enrichSharedPlaylistMbids(
+export async function enrichStaticPlaylistMbids(
   playlistId,
   {
-    resolveTrackContext = resolveWeeklyFlowTrackContext,
+    resolveTrackContext = resolveTrackSearchContext,
     reconcileArtistMbids = false,
   } = {},
 ) {
   const safePlaylistId = String(playlistId || "").trim();
   if (!safePlaylistId) return { missing: true, changed: false };
 
-  const snapshotPlaylist = flowPlaylistConfig.getSharedPlaylist(safePlaylistId);
+  const snapshotPlaylist = flowPlaylistConfig.getStaticPlaylist(safePlaylistId);
   if (!snapshotPlaylist) return { missing: true, changed: false };
 
   const snapshotJobs = downloadTracker.getByPlaylistType(safePlaylistId);
@@ -245,7 +245,7 @@ export async function enrichSharedPlaylistMbids(
   const resolver =
     typeof resolveTrackContext === "function"
       ? resolveTrackContext
-      : resolveWeeklyFlowTrackContext;
+      : resolveTrackSearchContext;
   const rawResolutions = await mapWithConcurrency(snapshotTracks, 4, (track) =>
     buildResolution(track, snapshotJobs, resolver, reconcileArtistMbids === true),
   );
@@ -271,7 +271,7 @@ export async function enrichSharedPlaylistMbids(
   return withPlaylistMutationLock(
     safePlaylistId,
     async () => {
-      const currentPlaylist = flowPlaylistConfig.getSharedPlaylist(safePlaylistId);
+      const currentPlaylist = flowPlaylistConfig.getStaticPlaylist(safePlaylistId);
       if (!currentPlaylist) return { missing: true, changed: false };
 
       const currentTracks = Array.isArray(currentPlaylist.tracks) ? currentPlaylist.tracks : [];
@@ -287,12 +287,12 @@ export async function enrichSharedPlaylistMbids(
 
       let updatedPlaylist = currentPlaylist;
       if (playlistTracksUpdated > 0) {
-        updatedPlaylist = flowPlaylistConfig.updateSharedPlaylist(safePlaylistId, {
+        updatedPlaylist = flowPlaylistConfig.updateStaticPlaylist(safePlaylistId, {
           tracks: nextTracks,
         });
       }
 
-      // updateSharedPlaylist already busts cache, but bust again for the full enrichment context
+      // updateStaticPlaylist already busts cache, but bust again for the full enrichment context
       import("./unifiedSearchService.js").then(({ clearSearchContextCache }) => clearSearchContextCache()).catch(() => {});
 
       const jobs = downloadTracker.getByPlaylistType(safePlaylistId);

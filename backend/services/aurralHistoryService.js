@@ -1,9 +1,9 @@
 import crypto from "crypto";
 import { expandAlbumGrabHistory } from "./albumGrabActivity.js";
 import { dbOps } from "../db/helpers/index.js";
-import { resolveBlockedJobSourceFilename } from "./playlistDownloadUtils.js";
-import { flowPlaylistConfig } from "./weeklyFlow/weeklyFlowPlaylistConfig.js";
-import { getCanonicalLibraryForAlbumReferences } from "./libraryQueryService.js";
+import { resolveBlockedJobSourceFilename } from "./downloadUtils.js";
+import { flowPlaylistConfig } from "./playlists/flowPlaylistConfig.js";
+import { getLibraryForAlbumReferences } from "./libraryQueryService.js";
 
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const STALE_TRACK_JOB_MS = 15 * 60 * 1000;
@@ -31,7 +31,7 @@ const ACTIVITY_HIDDEN_KINDS = new Set([
 const resolvePlaylistName = (playlistId) => {
   const id = String(playlistId || "").trim();
   if (!id) return "Playlist";
-  const shared = flowPlaylistConfig.getSharedPlaylist(id);
+  const shared = flowPlaylistConfig.getStaticPlaylist(id);
   if (shared?.name) return shared.name;
   const flow = flowPlaylistConfig.getFlow(id);
   if (flow?.name) return flow.name;
@@ -47,7 +47,7 @@ const buildPlaylistHref = (playlistId) => {
 const buildTrackJobHref = (job) => {
   const playlistId = job?.playlistId || job?.playlistType;
   if (playlistId === "library" && job?.albumMbid) {
-    const album = getCanonicalLibraryForAlbumReferences({
+    const album = getLibraryForAlbumReferences({
       source: "all",
       references: [job.albumMbid],
     }).albums[0];
@@ -517,8 +517,8 @@ const canViewPlaylistActivity = (user, playlistId, ownerUserId = undefined) => {
   if (!id || id === "library") return true;
   const flow = flowPlaylistConfig.getFlow(id);
   if (flow) return flowPlaylistConfig.canUserAccessFlow(user, flow);
-  const playlist = flowPlaylistConfig.getSharedPlaylist(id);
-  return playlist ? flowPlaylistConfig.canUserAccessSharedPlaylist(user, playlist) : false;
+  const playlist = flowPlaylistConfig.getStaticPlaylist(id);
+  return playlist ? flowPlaylistConfig.canUserAccessStaticPlaylist(user, playlist) : false;
 };
 
 const loadPendingPlaylistImportHistory = async (user) => {
@@ -559,7 +559,7 @@ const loadPendingPlaylistImportHistory = async (user) => {
           subtitle: `${sourceName} · ${countLabel} waiting for download`,
           status: state,
           statusLabel: state === "processing" ? "Preparing" : "Queued",
-          href: flowPlaylistConfig.getSharedPlaylist(playlistId)
+          href: flowPlaylistConfig.getStaticPlaylist(playlistId)
             ? buildPlaylistHref(playlistId)
             : null,
           metadata: {
@@ -599,7 +599,7 @@ const loadRecentHistory = () =>
   dbOps.getAurralHistory({ since: Date.now() - MAX_AGE_MS, limit: 300 });
 
 export const syncTrackDownloadHistory = async (historyEntries = null) => {
-  const { downloadTracker } = await import("./weeklyFlow/weeklyFlowDownloadTracker.js");
+  const { downloadTracker } = await import("./downloadJobs/downloadTracker.js");
   const trackEntries = (historyEntries || loadRecentHistory()).filter(
     (entry) =>
       entry.kind === "track_download" &&
@@ -1125,7 +1125,7 @@ export const getAurralHistoryRequests = async (lidarrClient = null, user = null)
   const entries = [...(await loadPendingPlaylistImportHistory(user)), ...loadRecentHistory()];
   const entryIds = new Set(entries.map((e) => e.id));
 
-  const { downloadTracker } = await import("./weeklyFlow/weeklyFlowDownloadTracker.js");
+  const { downloadTracker } = await import("./downloadJobs/downloadTracker.js");
   const jobs = downloadTracker.getAll();
   for (const job of jobs) {
     if (job.status !== "blocked" && job.status !== "pending" && job.status !== "downloading") {
