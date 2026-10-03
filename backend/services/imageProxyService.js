@@ -658,13 +658,11 @@ export const warmPublicImageUrl = async (sourceUrl, imageProfile = "library") =>
       return null;
     }
   }
-  const srcMatch = normalized.match(/\/api\/image-proxy\?src=([^&]+)/i);
-  const remote = srcMatch ? decodeURIComponent(srcMatch[1]) : normalized;
-  if (!remote || remote.startsWith("/") || remote.startsWith("data:") || remote.startsWith("blob:")) {
-    return remote || null;
+  if (normalized.startsWith("/") || normalized.startsWith("data:") || normalized.startsWith("blob:")) {
+    return normalized;
   }
   try {
-    const entry = await warmImageProxy(remote, imageProfile);
+    const entry = await warmImageProxy(normalized, imageProfile);
     return entry?.localUrl || null;
   } catch {
     return null;
@@ -686,31 +684,7 @@ export const buildStableImageProxyUrl = (sourceUrl) => {
     return sourceFromMeta ? buildStableImageProxyUrl(sourceFromMeta) : null;
   }
 
-  const srcMatch = normalized.match(/\/api\/image-proxy\?src=([^&]+)/i);
-  let remote = normalized;
-  if (srcMatch) {
-    try {
-      remote = decodeURIComponent(srcMatch[1]);
-    } catch {
-      return normalized;
-    }
-  }
-  if (
-    remote.startsWith("/") ||
-    remote.startsWith("data:") ||
-    remote.startsWith("blob:")
-  ) {
-    return normalized;
-  }
-
-  try {
-    const parsed = new URL(remote);
-    if (!["http:", "https:"].includes(parsed.protocol)) return normalized;
-  } catch {
-    return normalized;
-  }
-
-  return remote;
+  return normalized;
 };
 
 export const handleImageProxyRequest = async (req, res) => {
@@ -748,22 +722,5 @@ export const handleImageProxyRequest = async (req, res) => {
     root: IMAGE_PROXY_DIR,
     dotfiles: "allow",
   });
-};
-
-export const handleLegacyImageProxyRequest = async (req, res) => {
-  const rawSourceUrl = typeof req.query.src === "string" ? req.query.src.trim() : "";
-  if (!rawSourceUrl) {
-    return res.status(404).json({ error: "Image not found" });
-  }
-
-  try {
-    const cached = await warmImageProxy(rawSourceUrl);
-    if (!cached?.localUrl) {
-      return res.status(404).json({ error: "Image not found" });
-    }
-    return res.redirect(302, cached.localUrl);
-  } catch {
-    return res.status(404).json({ error: "Image not found" });
-  }
 };
 

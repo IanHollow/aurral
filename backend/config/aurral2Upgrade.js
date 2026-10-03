@@ -279,6 +279,10 @@ function renameQueuedWork(db) {
   db.prepare("DELETE FROM settings WHERE key GLOB 'weeklyFlowOperationTokens*' OR key = 'weeklyFlowIncompleteRetryJobs'").run();
   if (!hasTable(db, "_honker_live")) return;
   db.prepare("UPDATE _honker_live SET queue = 'playlist-operation' WHERE queue = 'weekly-flow-operation'").run();
+  db.prepare(`
+    UPDATE _honker_live SET queue = 'release-metadata-refresh', state = 'pending', worker_id = NULL, claim_expires_at = NULL
+    WHERE queue = 'system-task' AND json_extract(payload, '$.kind') = 'release-metadata-refresh'
+  `).run();
   const updatePayload = db.prepare("UPDATE _honker_live SET payload = ? WHERE id = ?");
   for (const row of db.prepare("SELECT id, payload FROM _honker_live").all()) {
     let payload;

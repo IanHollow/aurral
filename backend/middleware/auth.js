@@ -556,7 +556,6 @@ export const authMiddleware = (req, res, next) => {
       req.path === "/api/health/bootstrap" ||
       req.path === "/api/filesystem/browse" ||
       req.path === "/api/filesystem/ensure" ||
-      req.path === "/api/image-proxy" ||
       req.path.startsWith("/api/image-proxy/") ||
       (req.method === "GET" && /^\/api\/feeds\/lidarr\/flows\/[^/]+\.json$/i.test(req.path))
     ) {
@@ -567,10 +566,8 @@ export const authMiddleware = (req, res, next) => {
       /^\/api\/library\/records\/stream\/[^/]+\/[^/]+$/i.test(req.path) ||
       /^\/api\/library\/file-stream\/[^/]+\/[^/]+$/i.test(req.path) ||
       /^\/api\/artists\/[a-f0-9-]{36}\/stream$/i.test(req.path) ||
-      /^\/api\/weekly-flow\/stream\/[^/]+$/i.test(req.path) ||
       /^\/api\/playlists\/stream\/[^/]+$/i.test(req.path) ||
       /^\/api\/playlists\/staging-stream\/[^/]+$/i.test(req.path) ||
-      (req.method === "GET" && /^\/api\/weekly-flow\/artwork\/[^/]+$/i.test(req.path)) ||
       (req.method === "GET" && /^\/api\/playlists\/artwork\/[^/]+$/i.test(req.path)) ||
       (req.method === "GET" && /^\/api\/discover\/artwork\/[^/]+$/i.test(req.path))
     ) {

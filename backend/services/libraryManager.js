@@ -77,7 +77,6 @@ const getTypeName = (item) => {
   return "";
 };
 import {
-  musicbrainzRequest,
   musicbrainzGetArtistReleaseGroups,
   musicbrainzGetArtistIdentityByMbid,
   musicbrainzResolveArtistMbidByName,
@@ -1173,46 +1172,6 @@ export class LibraryManager {
       }
     } catch (error) {
       logger.error('library', `Failed to fetch albums for artist ${mbid}: ${error.message}`);    }
-  }
-
-  async fetchAlbumTracks(albumId, releaseGroupMbid) {
-    try {
-      const rgData = await musicbrainzRequest(`/release-group/${releaseGroupMbid}`, {
-        inc: "releases",
-      });
-
-      if (rgData.releases && rgData.releases.length > 0) {
-        const releaseId = rgData.releases[0].id;
-
-        const releaseData = await musicbrainzRequest(`/release/${releaseId}`, {
-          inc: "recordings",
-        });
-
-        if (releaseData.media && releaseData.media.length > 0) {
-          for (const medium of releaseData.media) {
-            if (medium.tracks) {
-              for (const track of medium.tracks) {
-                const recording = track.recording;
-                if (recording) {
-                  try {
-                    await this.addTrack(
-                      albumId,
-                      recording.id,
-                      recording.title,
-                      track.position || 0,
-                    );
-                  } catch (err) {
-                    if (!err.message.includes("already exists")) {
-                      logger.error('library', `Failed to add track ${recording.title}: ${err.message}`);                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    } catch (error) {
-      logger.error('library', `Failed to fetch tracks for album ${releaseGroupMbid}: ${error.message}`);    }
   }
 
   async getArtist(mbid, { forceRefresh = false, managedBy = null } = {}) {
@@ -3213,33 +3172,6 @@ export class LibraryManager {
           : "failed";
       return { success: false, code, error: error.message };
     }
-  }
-
-  async addTrack(albumId, trackMbid, trackName, trackNumber, options = {}) {
-    const album = await this.getAlbumById(albumId);
-    if (!album) {
-      throw new Error("Album not found");
-    }
-
-    const tracks = await this.getTracks(albumId);
-    const existing = tracks.find((t) => t.mbid === trackMbid);
-    if (existing) {
-      return existing;
-    }
-
-    return {
-      id: `${albumId}-${trackNumber}`,
-      albumId,
-      artistId: album.artistId,
-      mbid: trackMbid,
-      trackName,
-      trackNumber,
-      path: null,
-      quality: options.quality || null,
-      size: 0,
-      addedAt: new Date().toISOString(),
-      hasFile: false,
-    };
   }
 
   async getTracks(albumId, { managedBy = null } = {}) {

@@ -125,18 +125,14 @@ export class NavidromePlaybackDestination {
     return String(value || "").replace(/[<>:"/\\|?*]/g, "_").trim();
   }
 
-  getPlaylistNames({ entityId, ownerUserId = null, displayName } = {}) {
+  getPlaylistNames({ ownerUserId = null, displayName } = {}) {
     const name = String(displayName || "").trim();
     const owner = ownerUserId == null ? null : userOps.getUserById(ownerUserId);
     const prefixed = owner?.username ? `${owner.username} - ${name}` : name;
     const current = this._prefixOwnerUsername ? prefixed : name;
-    const shared = Boolean(flowPlaylistConfig.getStaticPlaylist(entityId));
-    const legacy = shared
-      ? [name, `[AS] ${name}`, `Aurral Shared ${name}`, prefixed]
-      : [name, `[A] ${name}`, `Aurral ${name}`, prefixed];
     return {
       current,
-      legacy: [...new Set(legacy)].filter((candidate) => candidate !== current),
+      legacy: [...new Set([name, prefixed])].filter((candidate) => candidate !== current),
     };
   }
 

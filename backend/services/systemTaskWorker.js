@@ -142,8 +142,6 @@ const {
   isRunning: isSystemTaskWorkerRunning,
 } = createHonkerWorker({
   name: "system-task",
-  interruptible: (payload) => payload?.kind === "release-metadata-refresh",
-  prepareJob: prepareSystemTask,
   getQueue: getSystemTaskQueue,
   processJob: processSystemTask,
   idlePollS: 10,

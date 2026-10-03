@@ -51,9 +51,8 @@ export function buildAurralIdentityMarker(metadata = {}) {
 }
 
 export function parseAurralIdentityMarker(value) {
-  const comments = Array.isArray(value) ? value : [value];
-  for (const entry of comments) {
-    const text = String(typeof entry === "object" ? entry?.text || "" : entry || "").trim();
+  for (const entry of Array.isArray(value) ? value : [value]) {
+    const text = String(entry || "").trim();
     if (!text.startsWith(AURRAL_IDENTITY_PREFIX)) continue;
     try {
       const parsed = JSON.parse(text.slice(AURRAL_IDENTITY_PREFIX.length));

@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 
 import { useNavigate } from "react-router";
-const LEGACY_DISMISS_KEY = "lastfm_banner_dismissed";
 const DISMISS_KEY_PREFIX = "aurral:lastfm-banner-dismissed";
 
 const getDismissKey = (user) => {
@@ -13,16 +12,7 @@ const getDismissKey = (user) => {
 
 const readDismissed = (user) => {
   try {
-    const dismissKey = getDismissKey(user);
-    if (localStorage.getItem(dismissKey) === "1") {
-      return true;
-    }
-
-    if (sessionStorage.getItem(LEGACY_DISMISS_KEY) === "1") {
-      localStorage.setItem(dismissKey, "1");
-      sessionStorage.removeItem(LEGACY_DISMISS_KEY);
-      return true;
-    }
+    return localStorage.getItem(getDismissKey(user)) === "1";
   } catch {}
 
   return false;
@@ -62,7 +52,6 @@ const LastfmBanner = () => {
             setDismissed(true);
             try {
               localStorage.setItem(getDismissKey(user), "1");
-              sessionStorage.removeItem(LEGACY_DISMISS_KEY);
             } catch {}
           }}
         >

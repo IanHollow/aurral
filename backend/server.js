@@ -72,8 +72,7 @@ const allowedCorsOrigins = String(process.env.CORS_ORIGIN || "")
   .filter(Boolean);
 
 const isSubsonicRequest = (req) => req.path === "/rest" || req.path.startsWith("/rest/");
-const isImageProxyRequest = (req) =>
-  req.path === "/api/image-proxy" || req.path.startsWith("/api/image-proxy/");
+const isImageProxyRequest = (req) => req.path.startsWith("/api/image-proxy/");
 
 const corsDefaults = {
   methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
@@ -189,10 +188,6 @@ app.use("/api/updates", updatesRouter);
 app.use("/api/filesystem", filesystemRouter);
 app.use("/api/feeds", lidarrFeedRouter);
 app.use("/api/playlists", playlistsRouter);
-app.use("/api/weekly-flow", (req, res) => {
-  const parsed = new URL(req.url, "http://localhost");
-  res.redirect(308, `/api/playlists${parsed.pathname}${parsed.search}`);
-});
 app.use("/api/auth", authRouter);
 app.use("/api/scrobbling", scrobblingRouter);
 app.use("/api/play-events", playEventsRouter);
@@ -315,7 +310,7 @@ const broadcastPlaylistStatus = async () => {
   if (playlistStatusBroadcastInFlight) return;
   playlistStatusBroadcastInFlight = true;
   try {
-    if (!hasWsSubscribers("weekly-flow") && !hasWsSubscribers("playlists")) {
+    if (!hasWsSubscribers("playlists")) {
       return;
     }
     const payloadByAudience = new Map();
@@ -349,7 +344,6 @@ const broadcastPlaylistStatus = async () => {
       client._lastPlaylistStatusPayloadByChannel.set(channel, cached.payload);
       return cached.message;
     };
-    websocketService.broadcastPerClient("weekly-flow", buildPayload("weekly-flow"));
     websocketService.broadcastPerClient("playlists", buildPayload("playlists"));
   } catch (error) {
     logger.warn("system", "Failed to broadcast playlist status:", { message: error.message });
