@@ -91,7 +91,9 @@ Aurral checks once a day and searches every album with a monitored missing track
 
 ## Follow an Aurral album download
 
-A monitored album shows its download state on its page, such as **Queued**, **Downloading**, **Partially available**, or **Needs attention**.
+A monitored album shows its download state on its page, such as **Queued**, **Downloading**, **Partially available**, or **Needs attention**. An album is complete when every track you monitor is available.
+
+Aurral asks for the tracklist that most releases of the album share, in the order most of them share. That is usually the standard edition rather than a deluxe edition, a box set, or a pressing that swaps tracks. If the album download turns out to be a whole shorter edition, the album is complete. Aurral stops monitoring the tracks that only the longer edition has and does not search for them. To get one of them, select the download button on its row.
 
 - To stop unfinished tracks, select **Cancel downloads**. Finished tracks stay in the Library.
 - To search again for cancelled and failed tracks, select **Retry**. While Lidarr is connected, Lidarr handles albums, so use the album's download button instead.
@@ -113,7 +115,7 @@ To remove an album or artist, select **Delete album** or **Delete artist** at th
 
 ## Where Aurral keeps files
 
-Aurral keeps permanent tracks in `Artist/Album/Track` folders in the Downloads Folder.
+Aurral keeps permanent tracks in `Artist/Album/Track` folders in the Downloads Folder. When Aurral knows a track's position on the album, it names the file `07 - Title`, so the folder lists in album order.
 
 Flow tracks are temporary. They live under `_flows` and are not part of the Library, with two exceptions:
 
@@ -137,7 +139,7 @@ To scan now, select **Refresh** in Library and choose a scan:
 - **Quick scan** checks every folder, reads new and changed files, and marks missing files as unavailable.
 - **Full scan** reads the tags of every file again. Use it after you retag files without changing their size or modification time, or when a quick scan does not fix stale metadata. A full scan can take a long time on a large library. It keeps running if you leave the page.
 
-When a scan finishes, an open Library page reloads. **Newest** sorting and the home page use the time that a file entered the Library, not the release date.
+When a scan finishes, an open Library page reloads. **Recently added** sorting on albums, tracks, and artists and the home page use the time that a file entered the Library, not the release date.
 
 If Discover says that an album is in Lidarr but the Library does not show it, Aurral probably cannot read the Lidarr root folder. Run **Settings > Storage health > Run checks** and fix the **Lidarr library** section, then select **Refresh**. See [Filesystem and mounts](/getting-started/storage/).
 

@@ -265,7 +265,6 @@ test("static playlist deletion cancels its pipeline before clearing the tracker"
   });
 
   t.mock.method(downloadWorker, "blockPlaylist", async () => {});
-  t.mock.method(downloadWorker, "clearIncompleteRetry", async () => {});
   t.mock.method(downloadWorker, "waitForPlaylistIdle", async () => {});
   t.mock.method(downloadWorker, "unblockPlaylist", async () => {});
   t.mock.method(downloadWorker, "pruneOrphanedJobState", async () => {});
@@ -316,7 +315,6 @@ test("static playlist track replacement cancels dependent quality upgrades", asy
   });
 
   t.mock.method(downloadWorker, "blockPlaylist", async () => {});
-  t.mock.method(downloadWorker, "clearIncompleteRetry", async () => {});
   t.mock.method(downloadWorker, "waitForPlaylistIdle", async () => {});
   t.mock.method(downloadWorker, "unblockPlaylist", async () => {});
   t.mock.method(downloadWorker, "pruneOrphanedJobState", async () => {});
@@ -394,7 +392,7 @@ test("settled slskd searches no longer block playlist cancellation", async (t) =
   const playlistId = "settled-search-playlist";
   const originalSettings = dbOps.getSettings();
   const { slskdClient } = await importFromRepo("backend/services/slskdClient.js");
-  const { processPipelinePayload } = await importFromRepo("backend/services/slskdOrchestrator.js");
+  const { processPipelinePayload } = await importFromRepo("backend/services/downloadPipeline.js");
   dbOps.updateSettings({
     ...originalSettings,
     integrations: {
@@ -407,16 +405,25 @@ test("settled slskd searches no longer block playlist cancellation", async (t) =
     playlistId,
   );
   let searchCount = 0;
-  t.mock.method(slskdClient, "createSearch", async () => ({ id: `settled-search-${++searchCount}` }));
-  t.mock.method(slskdClient, "waitForSearch", async () => ({}));
-  t.mock.method(slskdClient, "flattenSearchResults", () => []);
-  t.mock.method(slskdClient, "settleSearch", async () => ({}));
+  t.mock.method(slskdClient, "createSearch", async (_query, options) => {
+    const id = `settled-search-${++searchCount}`;
+    options.onSearchCreated(id);
+    return { id };
+  });
+  t.mock.method(slskdClient, "getSearch", async () => ({ state: "Completed, TimedOut", responses: [] }));
+  t.mock.method(slskdClient, "isCleanupAfterRunsEnabled", () => false);
   t.mock.method(slskdClient, "cleanupAfterRun", async () => ({ cleanedSearchIds: [] }));
 
   try {
-    await processPipelinePayload({ phase: "search", source: "slskd", jobId, playlistId });
+    let payload = { phase: "search", source: "slskd", jobId, playlistId };
+    let sawSearchWork = false;
+    while (payload?.phase === "search") {
+      payload = await processPipelinePayload(payload);
+      sawSearchWork ||= listDownloadProviderWork({ playlistId, provider: "slskd-search" }).length > 0;
+    }
 
     assert.ok(searchCount > 0);
+    assert.ok(sawSearchWork);
     assert.deepEqual(listDownloadProviderWork({ playlistId, provider: "slskd-search" }), []);
   } finally {
     dbOps.updateSettings(originalSettings);
@@ -762,7 +769,6 @@ test("clearing a shown flow or deleting any flow rescans the library", async (t)
   const hidden = flowPlaylistConfig.createFlow({ name: "Hidden Flow", size: 10 });
 
   t.mock.method(downloadWorker, "blockPlaylist", async () => {});
-  t.mock.method(downloadWorker, "clearIncompleteRetry", async () => {});
   t.mock.method(downloadWorker, "waitForPlaylistIdle", async () => {});
   t.mock.method(downloadWorker, "unblockPlaylist", async () => {});
   t.mock.method(downloadWorker, "setRetryCyclePaused", () => {});
@@ -799,7 +805,6 @@ test("rotating a flow shown in the library rescans the library", async (t) => {
   flowPlaylistConfig.updateFlow(flow.id, { showInLibrary: true });
 
   t.mock.method(downloadWorker, "blockPlaylist", async () => {});
-  t.mock.method(downloadWorker, "clearIncompleteRetry", async () => {});
   t.mock.method(downloadWorker, "waitForPlaylistIdle", async () => {});
   t.mock.method(downloadWorker, "unblockPlaylist", async () => {});
   t.mock.method(downloadWorker, "prepareFlowRunPlan", async () => ({}));

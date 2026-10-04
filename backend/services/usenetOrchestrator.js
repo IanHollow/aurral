@@ -4,12 +4,17 @@ import { downloadTracker } from "./downloadJobs/downloadTracker.js";
 import { prowlarrClient } from "./prowlarrClient.js";
 import { getDownloadClient } from "./download/downloadClientSettings.js";
 import { logger } from "./logger.js";
-import { buildTrackSearchTiers } from "./downloadJobs/trackSearchQueries.js";
 import {
+  buildUsenetSearchQueries,
   isAudioFile,
+  isProwlarrMusicQuery,
   rankUsenetReleases,
   selectRankedUsenetCandidates,
 } from "./downloadJobs/usenetReleaseSearch.js";
+import {
+  cacheSearchResults,
+  getCachedSearchResults,
+} from "./downloadJobs/searchResultCache.js";
 import {
   selectVerifiedDownloadedFile,
 } from "./trackMatching/index.js";
@@ -19,7 +24,7 @@ import {
   buildResolvedJobTrack as buildResolvedTrack,
   commitDownloadedFile,
   joinUnderRoot,
-  sanitizePathPart,
+  buildTrackFileName,
   writeAudioMetadata,
 } from "./downloadUtils.js";
 import { deferForInactiveOwner } from "./downloadJobs/playlistOwnerStatus.js";
@@ -37,12 +42,13 @@ import {
 } from "./downloadJobs/downloadCancellation.js";
 import { getQualityProfile } from "./qualityProfileService.js";
 import { orderAdvertisedQualityCandidates } from "./qualityProfileModel.js";
-import { finishAlbumGrab } from "./albumGrab.js";
+import { albumGrabJobs, deniedAlbumSources, finishAlbumGrab } from "./albumGrab.js";
+import { isCompilationJobs } from "./albumReleases.js";
 
 const MIN_USENET_CANDIDATES = 2;
 const MAX_DOWNLOAD_CANDIDATES = 5;
 const POLL_DELAY_SECONDS = 5;
-const MAX_POLL_ATTEMPTS = 720;
+const MAX_MISSING_POLLS = 60;
 
 function getUsenetClient(preferredKey = null) {
   if (["sabnzbd", "nzbget"].includes(preferredKey)) {
@@ -57,24 +63,32 @@ function getUsenetClientKey(preferredKey = null) {
   return getUsenetClient(preferredKey).key;
 }
 
-function getSabnzbdClient() {
-  return getDownloadClient("sabnzbd");
+// Both clients drop the queue and history entry. SABnzbd also deletes the
+// job's remaining files; NZBGet keeps completed files on disk.
+function removeUsenetItem(payload, jobId) {
+  const client = getUsenetClient(payload.downloadClient || payload.manualDownloadClient);
+  for (const [entry, remove] of [
+    ["queue", () => client.deleteQueueItem(payload.nzbId)],
+    ["history", () => client.deleteHistoryItem(payload.nzbId)],
+  ]) {
+    remove().catch((error) => {
+      logger.warn("usenet", `Could not remove the ${client.key} ${entry} item`, {
+        jobId,
+        reason: error?.message || String(error),
+      });
+    });
+  }
 }
 
-function removeSabnzbdItem(nzbId, jobId) {
-  const client = getSabnzbdClient();
-  client.deleteQueueItem(nzbId).catch((error) => {
-    logger.warn("usenet", "Could not remove SABnzbd queue item", {
-      jobId,
-      reason: error?.message || String(error),
-    });
-  });
-  client.deleteHistoryItem(nzbId).catch((error) => {
-    logger.warn("usenet", "Could not remove SABnzbd history item", {
-      jobId,
-      reason: error?.message || String(error),
-    });
-  });
+const RELEASE_RESET = Object.freeze({ nzbId: null, history: null, missingPolls: 0 });
+
+// A release that failed or held no matching file is blocked for every track
+// it was meant to fill.
+function blockRelease(payload, job) {
+  const guid = String(getPayloadCandidate(payload)?.raw?.release?.guid || "").trim();
+  if (!guid) return;
+  const jobs = payload.albumGrab === true ? albumGrabJobs(payload) : [job];
+  for (const entry of jobs) downloadTracker.recordDeniedSource(entry.id, "usenet", guid);
 }
 
 function hasEnoughCandidates(aggregated, resolvedTrack, qualityOptions, albumGrab) {
@@ -97,10 +111,6 @@ function classifyHistoryStatus(item) {
     return "failed";
   }
   return "pending";
-}
-
-function readQueueStatus(item) {
-  return String(item?.Status || item?.status || "").toUpperCase();
 }
 
 async function findAudioFilesRecursive(root, depth = 0, matches = []) {
@@ -180,17 +190,67 @@ async function validateDownloadedRelease(audioFilePaths, candidate, resolvedTrac
   });
 }
 
+const releaseKey = (release) => [release.guid, release.downloadUrl, release.indexerId, release.title]
+  .map((entry) => String(entry || "").trim().toLowerCase())
+  .join("\0");
+
+// One Prowlarr query per pipeline step, so a slow indexer never holds the
+// pipeline for the whole search plan.
+async function advanceUsenetSearch(payload, queries, enough, runQuery) {
+  const aggregated = [];
+  const seen = new Set();
+  let index = Number(payload.searchQueryIndex || 0);
+  for (let queryIndex = 0; queryIndex < index; queryIndex += 1) {
+    const cached = getCachedSearchResults("usenet", queries[queryIndex]);
+    if (!cached) {
+      index = queryIndex;
+      break;
+    }
+    mergeSearchResults(aggregated, seen, cached, releaseKey);
+  }
+  let searchError = payload.searchError || "";
+  let searched = false;
+  while (index < queries.length && !enough(aggregated)) {
+    if (searched) {
+      return { payload: { ...payload, searchQueryIndex: index, searchError, delaySeconds: 0 } };
+    }
+    const query = queries[index];
+    let releases = getCachedSearchResults("usenet", query);
+    if (!releases) {
+      searched = true;
+      try {
+        releases = await runQuery(query);
+        cacheSearchResults("usenet", query, releases);
+      } catch (error) {
+        searchError = error?.message || String(error);
+        logger.warn("usenet", "Prowlarr search failed", {
+          jobId: payload.jobId,
+          query,
+          error: searchError,
+        });
+        releases = [];
+        cacheSearchResults("usenet", query, releases);
+      }
+    }
+    mergeSearchResults(aggregated, seen, releases, releaseKey);
+    index += 1;
+  }
+  return { aggregated, queryCount: index, searchError };
+}
+
 async function handleUsenetSearch(payload, helpers) {
   const job = downloadTracker.getJob(payload.jobId);
   if (!job) return null;
   if (job.status === "failed" || job.status === "done") return null;
-  downloadTracker.setDownloading(job.id);
-  downloadTracker.updateDownloadMetadata(job.id, {
-    downloadSource: "usenet",
-  });
-  import("./aurralHistoryService.js")
-    .then(({ recordTrackJobSearching }) => recordTrackJobSearching(job))
-    .catch((err) => { console.warn(err); });
+  if (!payload.searchQueries) {
+    downloadTracker.setDownloading(job.id);
+    downloadTracker.updateDownloadMetadata(job.id, {
+      downloadSource: "usenet",
+    });
+    import("./aurralHistoryService.js")
+      .then(({ recordTrackJobSearching }) => recordTrackJobSearching(job))
+      .catch((err) => { console.warn(err); });
+  }
 
   const resolvedTrack = {
     ...buildResolvedTrack(job, payload.track),
@@ -203,43 +263,36 @@ async function handleUsenetSearch(payload, helpers) {
       : null,
     upgrade: payload.upgrade === true,
   };
-  const searchTiers = buildTrackSearchTiers(resolvedTrack);
-  const deniedSources = Array.isArray(job.deniedRemoteSources) ? job.deniedRemoteSources : [];
-  const deniedSourceGuidSet = new Set(
-    deniedSources
-      .filter((entry) => Array.isArray(entry) && entry[0] === "usenet")
-      .map((entry) => String(entry[1] || "").trim()),
+  const albumGrab = payload.albumGrab === true;
+  const albumJobs = albumGrab ? albumGrabJobs(payload) : [];
+  const compilation = albumGrab && isCompilationJobs([job, ...albumJobs]);
+  const indexers = await prowlarrClient.getEnabledUsenetIndexers().catch(() => []);
+  const musicIndexers = indexers.filter((indexer) => indexer.musicSearch);
+  const searchContext = { ...resolvedTrack, compilation };
+  const queries = payload.searchQueries || buildUsenetSearchQueries(
+    searchContext,
+    { musicSearch: musicIndexers.length > 0, albumGrab },
   );
-  const aggregated = [];
-  const seen = new Set();
-  const queries = [];
-  let lastError = "";
-  for (const tier of searchTiers) {
-    if (hasEnoughCandidates(aggregated, resolvedTrack, qualityOptions, payload.albumGrab === true)) break;
-    for (const query of tier.queries) {
-      if (hasEnoughCandidates(aggregated, resolvedTrack, qualityOptions, payload.albumGrab === true)) break;
-      queries.push(query);
-      try {
-        const releases = await prowlarrClient.search(query);
-        mergeSearchResults(aggregated, seen, releases.filter((release) =>
-          !deniedSourceGuidSet.has(String(release.guid || "").trim())), (release) =>
-          [release.guid, release.downloadUrl, release.indexerId, release.title]
-            .map((entry) => String(entry || "").trim().toLowerCase())
-            .join("\0"),
-        );
-      } catch (error) {
-        lastError = error?.message || String(error);
-        logger.warn("slskd", "Prowlarr search failed", {
-          jobId: job.id,
-          query,
-          error: lastError,
-        });
-      }
-    }
-  }
-  const ranked = rankUsenetReleases(aggregated, resolvedTrack);
+  const runQuery = (query) => (isProwlarrMusicQuery(query)
+    ? prowlarrClient.search(query, { type: "music", indexers: musicIndexers })
+    : prowlarrClient.search(query));
+  const deniedSourceGuidSet = deniedAlbumSources([job, ...albumJobs], "usenet");
+  const allowed = (releases) => releases.filter((release) =>
+    !deniedSourceGuidSet.has(String(release.guid || "").trim().toLowerCase()));
+  const step = await advanceUsenetSearch(
+    { ...payload, searchQueries: queries },
+    queries,
+    (results) => hasEnoughCandidates(allowed(results), searchContext, qualityOptions, albumGrab),
+    runQuery,
+  );
+  if (!isPipelinePayloadActive(payload)) return null;
+  if (step.payload) return step.payload;
+  const aggregated = allowed(step.aggregated);
+  const lastError = step.searchError;
+  const queryCount = step.queryCount;
+  const ranked = rankUsenetReleases(aggregated, searchContext);
   const filteredRanked = deniedSourceGuidSet.size > 0
-    ? ranked.filter((entry) => !deniedSourceGuidSet.has(String(entry?.raw?.guid || "").trim()))
+    ? ranked.filter((entry) => !deniedSourceGuidSet.has(String(entry?.raw?.guid || "").trim().toLowerCase()))
     : ranked;
   const qualityRanked = orderAdvertisedQualityCandidates(
     filteredRanked.filter((entry) => entry.releaseAdmissible
@@ -262,13 +315,16 @@ async function handleUsenetSearch(payload, helpers) {
         ? `Prowlarr search failed: ${lastError}`
         : "No suitable Usenet search results";
     return helpers.failOrTryNextSource(payload, job, message, {
-      queryCount: queries.length,
+      queryCount,
       rawResultCount: aggregated.length,
       rankedCount: ranked.length,
     });
   }
   return {
     ...payload,
+    searchQueries: null,
+    searchQueryIndex: 0,
+    searchError: null,
     phase: "download",
     source: "usenet",
     candidates,
@@ -324,7 +380,7 @@ async function handleUsenetDownload(payload, helpers) {
       releaseTitle: release.title,
       error: message,
     });
-    if (hasNextCandidate(payload)) return buildNextCandidatePayload(payload, { nzbId: null, history: null });
+    if (hasNextCandidate(payload)) return buildNextCandidatePayload(payload, RELEASE_RESET);
     return helpers.failOrTryNextSource(payload, job, message);
   }
   if (submission.cancelled || !isPipelinePayloadActive(payload)) return null;
@@ -346,13 +402,6 @@ async function handleUsenetPoll(payload, helpers) {
   if (!job) return null;
   if (job.status === "failed" || job.status === "done") return null;
   const pollAttempts = Number(payload.pollAttempts || 0) + 1;
-  if (pollAttempts > MAX_POLL_ATTEMPTS) {
-    if (getUsenetClientKey(payload.downloadClient || payload.manualDownloadClient) === "sabnzbd") {
-      removeSabnzbdItem(payload.nzbId, job.id);
-    }
-    if (hasNextCandidate(payload)) return buildNextCandidatePayload(payload, { nzbId: null, history: null });
-    return helpers.failOrTryNextSource(payload, job, "Usenet polling timed out");
-  }
   const client = getUsenetClient(payload.downloadClient || payload.manualDownloadClient);
   const historyItem = await client.getHistoryItem(payload.nzbId);
   if (historyItem) {
@@ -367,10 +416,9 @@ async function handleUsenetPoll(payload, helpers) {
       };
     }
     if (state === "failed") {
-      if (getUsenetClientKey(payload.downloadClient || payload.manualDownloadClient) === "sabnzbd") {
-        removeSabnzbdItem(payload.nzbId, job.id);
-      }
-      if (hasNextCandidate(payload)) return buildNextCandidatePayload(payload, { nzbId: null, history: null });
+      removeUsenetItem(payload, job.id);
+      blockRelease(payload, job);
+      if (hasNextCandidate(payload)) return buildNextCandidatePayload(payload, RELEASE_RESET);
       return helpers.failOrTryNextSource(
         payload,
         job,
@@ -378,21 +426,21 @@ async function handleUsenetPoll(payload, helpers) {
       );
     }
   }
-  const queueItem = await client.getQueueItem(payload.nzbId);
-  const queueStatus = readQueueStatus(queueItem);
-  if (queueStatus && queueStatus.includes("PAUSED")) {
-    return {
-      ...payload,
-      phase: "poll",
-      delaySeconds: POLL_DELAY_SECONDS,
-      pollAttempts,
-    };
+  // A queued, paused, slow, or post-processing download keeps waiting like it
+  // would in Lidarr. Only a download that left both the queue and the history
+  // moves on.
+  const present = Boolean(historyItem) || Boolean(await client.getQueueItem(payload.nzbId));
+  const missingPolls = present ? 0 : Number(payload.missingPolls || 0) + 1;
+  if (missingPolls > MAX_MISSING_POLLS) {
+    if (hasNextCandidate(payload)) return buildNextCandidatePayload(payload, RELEASE_RESET);
+    return helpers.failOrTryNextSource(payload, job, "The Usenet download left the download client");
   }
   return {
     ...payload,
     phase: "poll",
     delaySeconds: POLL_DELAY_SECONDS,
     pollAttempts,
+    missingPolls,
   };
 }
 
@@ -409,24 +457,27 @@ async function handleUsenetFinalize(payload, helpers) {
     );
     const next = await finishAlbumGrab(payload, {
       filePaths, source: "usenet", album: candidate?.resolvedAlbumName || job.albumName,
+      resetFields: RELEASE_RESET,
     });
-    if (getUsenetClientKey(payload.downloadClient || payload.manualDownloadClient) === "sabnzbd") {
-      removeSabnzbdItem(payload.nzbId, job.id);
-    }
+    removeUsenetItem(payload, job.id);
     return next;
   }
   const resolvedTrack = {
     ...buildResolvedTrack(job, payload.track),
     upgradeForJobId: payload.upgradeForJobId || null,
   };
+  const audioFiles = await collectDownloadedAudioFiles(
+    historyItem,
+    payload.downloadClient || payload.manualDownloadClient,
+  );
   const found = await validateDownloadedRelease(
-    await collectDownloadedAudioFiles(historyItem, payload.downloadClient || payload.manualDownloadClient),
+    audioFiles,
     candidate,
     resolvedTrack,
     { manualSelection: payload.manualSelection === true },
   );
   if (!isPipelinePayloadActive(payload)) {
-    if (job.downloadClient === "sabnzbd") removeSabnzbdItem(payload.nzbId, job.id);
+    removeUsenetItem(payload, job.id);
     return null;
   }
   if (
@@ -442,10 +493,9 @@ async function handleUsenetFinalize(payload, helpers) {
   if (!found.filePath) {
     const reason = found.validation?.reason
       || "Usenet download completed, but no matching audio file was found";
-    if (getUsenetClientKey(payload.downloadClient || payload.manualDownloadClient) === "sabnzbd") {
-      removeSabnzbdItem(payload.nzbId, job.id);
-    }
-    if (hasNextCandidate(payload)) return buildNextCandidatePayload(payload, { nzbId: null, history: null });
+    removeUsenetItem(payload, job.id);
+    if (audioFiles.length > 0) blockRelease(payload, job);
+    if (hasNextCandidate(payload)) return buildNextCandidatePayload(payload, RELEASE_RESET);
     return helpers.failOrTryNextSource(payload, job, reason);
   }
 
@@ -453,7 +503,7 @@ async function handleUsenetFinalize(payload, helpers) {
   const destination = String(payload.destination || "").trim();
   const ext = path.extname(found.filePath).toLowerCase();
   const finalDir = joinUnderRoot(playlistRoot, destination);
-  const finalName = `${sanitizePathPart(job.trackName, "Unknown Track")}${ext || ".mp3"}`;
+  const finalName = buildTrackFileName(job, ext || ".mp3");
   const finalPath = path.join(finalDir, finalName);
   const inactiveOwner = deferForInactiveOwner(payload, job);
   if (inactiveOwner) return inactiveOwner;
@@ -466,9 +516,7 @@ async function handleUsenetFinalize(payload, helpers) {
       found.filePath,
       finalPath,
     );
-    if (getUsenetClientKey(payload.downloadClient || payload.manualDownloadClient) === "sabnzbd") {
-      removeSabnzbdItem(payload.nzbId, job.id);
-    }
+    removeUsenetItem(payload, job.id);
     return finalizePipelineJobSuccess({
       downloadTracker,
       job,

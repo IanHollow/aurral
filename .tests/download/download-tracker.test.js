@@ -17,7 +17,7 @@ const [isolatedState, { db }, { dbOps }, trackerModule, qualityProfileService, w
   "backend/services/downloadJobs/downloadTracker.js",
   "backend/services/qualityProfileService.js",
   "backend/services/downloadJobs/downloadWorker.js",
-  "backend/services/slskdOrchestratorWorker.js",
+  "backend/services/downloadPipelineWorker.js",
   "backend/services/honkerDb.js",
 );
 
@@ -271,7 +271,7 @@ test("album siblings return to individual searches when the leader stops mid-gra
   assert.equal(grab.albumGrab, true);
 
   tracker.setFailed(ids[0], "Stopped by the user");
-  await orchestratorWorker.processOrchestratorJob(grab);
+  await orchestratorWorker.processPipelineJob(grab);
 
   for (const id of ids.slice(1)) {
     const sibling = tracker.getJob(id);
@@ -412,6 +412,30 @@ test("a started worker keeps its process busy only while downloads are pending",
       "library",
     );
     assert.equal(worker.hasWork(), true);
+  } finally {
+    worker.stop();
+  }
+});
+
+test("a worker starts no more searches than its concurrency allows", async (t) => {
+  const worker = new DownloadWorker(isolatedState.baseDir);
+  worker.updateWorkerSettings({ concurrency: 1 });
+  const dispatched = t.mock.method(worker, "processJob", async () => {});
+  t.mock.method(worker, "scheduleReuseLinkRepair", () => {});
+  const transaction = honkerDb.getHonkerDb().transaction();
+  transaction.execute("DELETE FROM _honker_live WHERE queue = 'slskd-pipeline'");
+  transaction.commit();
+  honkerDb.enqueuePipelineJob({ phase: "search", source: "slskd", jobId: "already-searching" });
+  const jobId = trackerModule.downloadTracker.addJob(
+    { artistName: "Artist", trackName: "Waiting Song" },
+    "library",
+  );
+  await worker.start();
+  try {
+    assert.equal(dispatched.mock.callCount(), 0);
+    worker.updateWorkerSettings({ concurrency: 2 });
+    worker.processLoop();
+    assert.deepEqual(dispatched.mock.calls.map((call) => call.arguments[0].id), [jobId]);
   } finally {
     worker.stop();
   }

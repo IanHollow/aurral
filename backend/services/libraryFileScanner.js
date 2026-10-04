@@ -4,10 +4,12 @@ import { parseFile } from "music-metadata";
 import {
   buildFallbackIdentityKey,
   buildIdentityKey,
+  findLibraryAlbumByReleaseMbid,
   getLibraryMediaFile,
   getAvailableLibraryMediaPaths,
   linkLibraryAlbumTrack,
   markLibraryMediaFilesUnavailable,
+  mergeReleaseKeyedLibraryAlbums,
   upsertLibraryAlbum,
   upsertLibraryArtist,
   upsertLibraryMediaFile,
@@ -19,6 +21,8 @@ import {
   setLibraryManagement,
 } from "./libraryManagementStore.js";
 import { parseAurralIdentityComment, readCommentIdentity } from "./downloadUtils.js";
+import { logger, safeLogDiagnostic } from "./logger.js";
+import { isVariousArtistsCredit } from "./trackMatching/titleText.js";
 
 const AUDIO_EXTENSIONS = new Set([
   ".aac",
@@ -149,6 +153,7 @@ function buildMetadataRecord(metadata, filePath, rootPath) {
     albumName,
     trackKey,
     trackMbid,
+    trackArtistName: isVariousArtistsCredit(artistName, artistMbid) ? text(common.artist) || artistName : artistName,
     title,
     trackNumber,
     discNumber,
@@ -298,6 +303,7 @@ export async function scanMusicRoot({
 } = {}) {
   const resolvedRoot = path.resolve(String(rootPath || ""));
   await fs.mkdir(resolvedRoot, { recursive: true });
+  mergeReleaseKeyedLibraryAlbums();
   const changed = Array.isArray(changedPaths)
     ? await resolveChangedFiles(resolvedRoot, changedPaths)
     : null;
@@ -316,6 +322,7 @@ export async function scanMusicRoot({
   const seenPaths = new Set();
   const failedPaths = new Set();
   const missingFilePaths = new Set();
+  let firstFailure = null;
   const scanResult = await withLibraryScan(source, resolvedRoot, (scanId) => {
     const run = async () => {
       const files = requestedFiles || walkAudioFiles(resolvedRoot);
@@ -350,10 +357,11 @@ export async function scanMusicRoot({
             metadata: record.artistMetadata,
             syncSearch,
           });
+          const releaseAlbum = findLibraryAlbumByReleaseMbid(record.releaseGroupMbid);
           const album = upsertLibraryAlbum({
-            identityKey: record.albumKey,
-            mbid: record.albumMbid,
-            releaseGroupMbid: record.releaseGroupMbid,
+            identityKey: releaseAlbum?.identity_key || record.albumKey,
+            mbid: releaseAlbum?.mbid || record.albumMbid,
+            releaseGroupMbid: releaseAlbum?.release_group_mbid || record.releaseGroupMbid,
             artistId: artist.id,
             title: record.albumName,
             albumArtist: record.albumArtist,
@@ -366,7 +374,7 @@ export async function scanMusicRoot({
             identityKey: record.trackKey,
             mbid: record.trackMbid,
             title: record.title,
-            artistName: record.artistName,
+            artistName: record.trackArtistName,
             metadata: record.trackMetadata,
             monitored: source !== "aurral" || downloadedByAurral,
             syncSearch,
@@ -376,6 +384,7 @@ export async function scanMusicRoot({
             trackId: track.id,
             discNumber: record.discNumber,
             trackNumber: record.trackNumber,
+            keepPosition: true,
             syncSearch,
           });
           upsertLibraryMediaFile({
@@ -396,8 +405,19 @@ export async function scanMusicRoot({
         } catch (error) {
           result.filesFailed += 1;
           if (error?.code === "ENOENT") missingFilePaths.add(filePath);
-          else failedPaths.add(filePath);
+          else {
+            failedPaths.add(filePath);
+            firstFailure ||= { filePath, reason: safeLogDiagnostic(error) };
+          }
         }
+      }
+      if (firstFailure) {
+        logger.warn("library", "Library scan could not index files", {
+          source,
+          failed: failedPaths.size,
+          example: firstFailure.filePath,
+          reason: firstFailure.reason,
+        });
       }
       if (unseenPaths && result.filesFailed === 0) {
         markLibraryMediaFilesUnavailable(source, unseenPaths);

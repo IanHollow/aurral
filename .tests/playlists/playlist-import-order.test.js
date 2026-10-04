@@ -137,7 +137,6 @@ test("mutation release unblocks every playlist and prunes after an unblock error
   );
   const calls = [];
   t.mock.method(downloadWorker, "blockPlaylist", async () => true);
-  t.mock.method(downloadWorker, "clearIncompleteRetry", async () => {});
   t.mock.method(downloadWorker, "waitForPlaylistIdle", async () => {});
   t.mock.method(downloadWorker, "unblockPlaylist", async (id) => {
     calls.push(`unblock:${id}`);
@@ -811,7 +810,7 @@ test("download pipeline work is deferred while its playlist owner is suspended",
   );
   userOps.updateUser(owner.id, { status: "suspended" });
   const { processPipelinePayload } = await importFromRepo(
-    "backend/services/slskdOrchestrator.js",
+    "backend/services/downloadPipeline.js",
   );
 
   const payload = { phase: "search", source: "slskd", jobId };

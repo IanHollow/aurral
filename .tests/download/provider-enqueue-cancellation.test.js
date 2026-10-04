@@ -27,7 +27,7 @@ const [
   "backend/services/downloadJobs/downloadCancellationService.js",
   "backend/services/usenetOrchestrator.js",
   "backend/services/deemixOrchestrator.js",
-  "backend/services/slskdOrchestrator.js",
+  "backend/services/downloadPipeline.js",
   "backend/services/sabnzbdClient.js",
   "backend/services/deemixClient.js",
   "backend/services/slskdClient.js",
@@ -218,7 +218,6 @@ test("slskd cancellation waits for an in-flight enqueue and can retry cleanup", 
   t.mock.method(slskdClient, "enqueueBatch", async () => {
     await gate.wait();
     return {
-      batchId: null,
       transferId: "slskd-race-transfer",
       username: "race-peer",
       transfers: [{ id: "slskd-race-transfer" }],

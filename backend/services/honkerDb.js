@@ -20,8 +20,6 @@ export const HONKER_QUEUE_NAMES = [
   "system-task-inbox",
   "weekly-flow-operation",
   "slskd-pipeline",
-  "playlist-retry",
-  "playlist-reserve-build",
   "playlist-mbid-enrichment",
   "library-scan",
   "discovery-refresh",
@@ -262,8 +260,8 @@ const pipeline = registerQueue({
   name: "slskd-pipeline",
   visibilityTimeoutS: 1200,
   maxAttempts: 5,
-  workerModule: "./slskdOrchestratorWorker.js",
-  workerStartFn: "startSlskdOrchestratorWorker",
+  workerModule: "./downloadPipelineWorker.js",
+  workerStartFn: "startDownloadPipelineWorker",
   defaultPriorityFn: (payload) =>
     getPipelinePriorityForPhase(payload?.phase) - (payload?.upgrade ? 100 : 0),
 });
@@ -302,26 +300,6 @@ const playlistOperation = registerQueue({
 
 export const getPlaylistOperationQueue = playlistOperation.getQueue;
 export const enqueuePlaylistOperationJob = playlistOperation.enqueueJob;
-
-const playlistRetry = registerQueue({
-  name: "playlist-retry",
-  visibilityTimeoutS: 1800,
-  maxAttempts: 5,
-  workerModule: "./downloadJobs/playlistRetryWorker.js",
-  workerStartFn: "startPlaylistRetryWorker",
-});
-export const getPlaylistRetryQueue = playlistRetry.getQueue;
-export const enqueuePlaylistRetryJob = playlistRetry.enqueueJob;
-
-const playlistReserveBuild = registerQueue({
-  name: "playlist-reserve-build",
-  visibilityTimeoutS: 1800,
-  maxAttempts: 4,
-  workerModule: "./flows/flowReserveBuildWorker.js",
-  workerStartFn: "startFlowReserveBuildWorker",
-});
-
-export const getPlaylistReserveBuildQueue = playlistReserveBuild.getQueue;
 
 const playlistMbidEnrichment = registerQueue({
   name: "playlist-mbid-enrichment",

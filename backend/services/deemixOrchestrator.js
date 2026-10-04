@@ -10,22 +10,32 @@ import {
   usableEvaluationEntries,
   validateDownloadedTrackFile,
 } from "./trackMatching/index.js";
-import { buildDeemixSearchQueries } from "./downloadJobs/deemixSearch.js";
+import {
+  buildDeemixAlbumSearchQueries,
+  buildDeemixSearchQueries,
+  isSameCoreAlbum,
+} from "./downloadJobs/deemixSearch.js";
 import { resolveDownloadRoot } from "./downloadPaths.js";
 import { getPathMappings, resolveLocalPath } from "./pathMappings.js";
 import {
   buildResolvedJobTrack as buildResolvedTrack,
   commitDownloadedFile,
   joinUnderRoot,
-  sanitizePathPart,
+  buildTrackFileName,
   writeAudioMetadata,
 } from "./downloadUtils.js";
 import { deferForInactiveOwner } from "./downloadJobs/playlistOwnerStatus.js";
 import { getQualityProfile } from "./qualityProfileService.js";
 import { isQualityUpgrade } from "./qualityProfileModel.js";
 import { readDeemixAlbumQueue } from "./deemixClient.js";
-import { albumGrabJobs, finishAlbumGrab } from "./albumGrab.js";
-import { normalizeMatchText } from "./trackMatching/nativeMatcher.js";
+import {
+  albumGrabJobs,
+  continueAlbumGrab,
+  deniedAlbumSources,
+  finishAlbumGrab,
+} from "./albumGrab.js";
+import { isCompilationJobs, jobReleaseTrack } from "./albumReleases.js";
+import { assessRelease } from "./trackMatching/nativeMatcher.js";
 import {
   getPayloadCandidate,
   hasNextCandidate,
@@ -40,6 +50,8 @@ import {
 } from "./downloadJobs/downloadCancellation.js";
 
 const SEARCH_LIMIT = 10;
+const MAX_ALBUM_CANDIDATES = 3;
+const ALBUM_QUEUE_RESET = Object.freeze({ queueUuid: null, downloadedPaths: null });
 const POLL_DELAY_SECONDS = 3;
 const MAX_POLL_ATTEMPTS = 200;
 
@@ -88,55 +100,63 @@ function readQueueError(queueItem) {
   return "";
 }
 
+// Album searches until one finds a same-titled album whose tracklist holds
+// the requested tracks; nothing is queued before that check.
 async function searchDeemixAlbum(payload, helpers, job, client) {
   const jobs = albumGrabJobs(payload);
-  const albums = new Map();
+  const denied = deniedAlbumSources([job, ...jobs], "deemix");
+  const requested = { tracks: jobs.map(jobReleaseTrack) };
+  const checked = new Set();
+  const ranked = [];
   let searchFailed = false;
-  for (const sibling of jobs) {
-    const request = buildResolvedTrack(sibling);
-    const queries = buildDeemixSearchQueries(request).slice(0, 2);
-    const results = [];
-    const seen = new Set();
-    let eligible = [];
-    for (const query of queries) {
-      try {
-        if (!isPipelinePayloadActive(payload)) return null;
-        const found = await client.search(query, { limit: SEARCH_LIMIT });
-        if (!isPipelinePayloadActive(payload)) return null;
-        mergeSearchResults(results, seen, found, (entry) => String(entry.id || "").trim());
-        const suitable = results.filter((result) => result.readable !== false && result.albumId
-          && normalizeMatchText(result.album) === normalizeMatchText(job.albumName));
-        const evaluation = await buildSourceCandidates({ source: "deemix", results: suitable, request });
-        eligible = evaluation.evaluations.filter((entry) => ["accept", "verify"].includes(entry.decision));
-        if (eligible.length > 0) break;
-      } catch (error) {
-        searchFailed = true;
-        logger.warn("deemix", "Album track search failed", {
-          jobId: sibling.id, reason: safeLogDiagnostic(error),
-        });
-      }
+  const compilation = isCompilationJobs(jobs);
+  for (const query of buildDeemixAlbumSearchQueries({ ...buildResolvedTrack(job), compilation })) {
+    let albums = [];
+    try {
+      albums = await client.searchAlbums(query, { limit: SEARCH_LIMIT });
+    } catch (error) {
+      searchFailed = true;
+      logger.warn("deemix", "Album search failed", { jobId: job.id, reason: safeLogDiagnostic(error) });
     }
     if (!isPipelinePayloadActive(payload)) return null;
-    for (const entry of eligible) {
-      const result = entry.candidate.raw;
-      const group = albums.get(result.albumId) || { albumId: result.albumId,
-        albumUrl: result.albumUrl, album: result.album, matchedJobIds: new Set() };
-      group.matchedJobIds.add(sibling.id);
-      albums.set(result.albumId, group);
+    const fresh = albums.filter((album) => !checked.has(album.id)
+      && !denied.has(`album:${album.id}`) && isSameCoreAlbum(album.title, job.albumName));
+    for (const album of fresh.slice(0, MAX_ALBUM_CANDIDATES)) {
+      checked.add(album.id);
+      let tracks;
+      try {
+        tracks = await client.getAlbumTracks(album.id);
+      } catch (error) {
+        searchFailed = true;
+        logger.warn("deemix", "Album tracklist failed", { jobId: job.id, reason: safeLogDiagnostic(error) });
+        continue;
+      }
+      if (!isPipelinePayloadActive(payload)) return null;
+      const assessment = assessRelease(requested, { files: tracks
+        .filter((track) => track.readable !== false)
+        .map((track) => ({
+          title: track.title,
+          artists: [track.artist].filter(Boolean),
+          durationMs: track.durationSec > 0 ? track.durationSec * 1000 : null,
+          trackNumber: track.trackNumber,
+        })) });
+      if (assessment.decision === "selectable") ranked.push({ album, assessment });
     }
+    if (ranked.length > 0) break;
   }
-  const ranked = [...albums.values()].sort((left, right) =>
-    right.matchedJobIds.size - left.matchedJobIds.size || left.albumId.localeCompare(right.albumId));
-  const best = ranked[0];
-  if (!best || best.matchedJobIds.size / jobs.length < 0.8
-    || ranked[1]?.matchedJobIds.size === best.matchedJobIds.size) {
+  ranked.sort((left, right) => right.assessment.coverage - left.assessment.coverage
+    || right.assessment.fit - left.assessment.fit);
+  if (ranked.length === 0) {
     return helpers.failOrTryNextSource(payload, job, searchFailed
       ? "deemix album search failed or found no selectable release"
       : "No selectable deemix album release");
   }
   return {
     ...payload, source: "deemix", phase: "download", candidateIndex: 0,
-    candidates: [{ raw: best, resolvedAlbumName: best.album }],
+    candidates: ranked.map(({ album }) => ({
+      raw: { albumId: album.id, albumUrl: album.url, album: album.title },
+      resolvedAlbumName: album.title,
+    })),
   };
 }
 
@@ -184,7 +204,8 @@ async function handleDeemixSearch(payload, helpers) {
     if (hasEnoughCandidates(aggregated, resolvedTrack)) break;
     try {
       const results = await client.search(query, { limit: SEARCH_LIMIT });
-      mergeSearchResults(aggregated, seen, results.filter((entry) => !deniedIds.has(String(entry.id || "").trim())), (entry) => String(entry.id || "").trim());
+      mergeSearchResults(aggregated, seen, results.filter((entry) => !deniedIds.has(String(entry.id || "").trim())
+        && !deniedIds.has(`album:${entry.albumId}`)), (entry) => String(entry.id || "").trim());
     } catch (error) {
       lastError = safeLogDiagnostic(error);
       logger.warn("deemix", "deemix search failed", {
@@ -257,7 +278,7 @@ async function handleDeemixDownload(payload, helpers) {
         downloadSource: "deemix",
         downloadClient: "deemix",
         downloadClientId: queueUuid,
-        releaseGuid: candidate.raw.albumId || candidate.raw.id,
+        releaseGuid: payload.albumGrab === true ? `album:${candidate.raw.albumId}` : candidate.raw.id,
         releaseTitle: candidate.raw.album || candidate.raw.title,
         remoteUsername: candidate.raw.artist,
         remoteFilename: candidate.raw.file,
@@ -332,7 +353,7 @@ async function handleDeemixPoll(payload, helpers) {
         albumFailedCount: albumQueue.failedCount, pollAttempts };
     }
     await client.removeFromQueue(payload.queueUuid).catch(() => {});
-    return helpers.failOrTryNextSource(payload, job,
+    return continueAlbumGrab(payload, ALBUM_QUEUE_RESET) || helpers.failOrTryNextSource(payload, job,
       safeLogDiagnostic(readQueueError(queueItem) || `deemix album ${status || "failed"}`));
   }
   if (!queueItem || status === "inQueue" || status === "downloading") {
@@ -360,7 +381,9 @@ async function handleDeemixFinalize(payload, helpers) {
     const filePaths = (payload.downloadedPaths || []).map((remote) =>
       resolveLocalPath(remote, getPathMappings("deemix")));
     try {
-      return await finishAlbumGrab(payload, { filePaths, source: "deemix" });
+      return await finishAlbumGrab(payload, {
+        filePaths, source: "deemix", resetFields: ALBUM_QUEUE_RESET,
+      });
     } finally {
       await getDeemixClient().removeFromQueue(payload.queueUuid).catch((error) => {
         logger.warn("deemix", "Could not remove completed album queue item", {
@@ -424,6 +447,7 @@ async function handleDeemixFinalize(payload, helpers) {
     ) {
       return null;
     }
+    downloadTracker.recordDeniedSource(job.id, "deemix", candidate?.raw?.id);
     const reason = safeLogDiagnostic(validation.reason || "deemix download failed track validation");
     if (hasNextCandidate(payload)) {
       return buildNextCandidatePayload(payload, { queueUuid: null, downloadedPath: null });
@@ -437,7 +461,7 @@ async function handleDeemixFinalize(payload, helpers) {
   const destination = String(payload.destination || "").trim();
   const ext = path.extname(filePath).toLowerCase();
   const finalDir = joinUnderRoot(playlistRoot, destination);
-  const finalName = `${sanitizePathPart(job.trackName, "Unknown Track")}${ext || ".flac"}`;
+  const finalName = buildTrackFileName(job, ext || ".flac");
   const finalPath = path.join(finalDir, finalName);
   const committed = await withPipelineCommitLock(payload, async () => {
     await writeAudioMetadata(filePath, resolvedTrack);

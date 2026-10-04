@@ -235,6 +235,7 @@ export async function validateDownloadedTrackFile({
     artists: [trackRequest.artistName, ...(trackRequest.artistAliases || [])].filter(Boolean),
     durationMs: trackRequest.durationMs,
     recordingMbid: trackRequest.recordingMbid,
+    albumName: trackRequest.albumName,
     trackNumber: trackRequest.trackNumber,
     albumTrackTitles: trackRequest.albumTrackTitles,
   }, {
@@ -246,7 +247,9 @@ export async function validateDownloadedTrackFile({
     artists: actual.artists,
     durationMs: actualDurationMs,
     recordingMbid: actual.recordingMbid,
+    album: actual.album,
     trackNumber: actual.trackNumber,
+    discNumber: actual.discNumber,
   });
   const hasOriginalIdentityTags = Boolean(readTagText(parsed?.common?.title)
     || readTagText(parsed?.common?.artist));

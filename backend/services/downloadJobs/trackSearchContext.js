@@ -7,6 +7,7 @@ import {
   getAlbumByMbid,
   listArtistAlbums,
   resolveAlbumByArtistAndTitle,
+  selectAlbumRelease,
 } from "../providers/brainzmashProvider.js";
 import {
   artistNamesMatch,
@@ -186,12 +187,7 @@ async function fetchReleaseContext(albumMbid) {
         String(album?.artistId || primaryArtist?.id || "").trim() || null;
       const artistName =
         String(primaryArtist?.name || "").trim() || null;
-      const releases = Array.isArray(album?.releases) ? album.releases : [];
-      const pickedRelease =
-        releases.find((release) => String(release?.status || "").toLowerCase() === "official") ||
-        releases.find((release) => Array.isArray(release?.tracks) && release.tracks.length > 0) ||
-        releases[0] ||
-        null;
+      const pickedRelease = selectAlbumRelease(album);
       if (!pickedRelease) {
         return {
           albumName: String(album?.title || "").trim() || null,
@@ -246,6 +242,18 @@ async function fetchLastfmTrackInfo(track) {
 }
 
 
+// A track with its recording, release group, position, length, and release
+// tracklist already came from MusicBrainz, so looking it up again only costs
+// requests. A recording ID is taken only from MusicBrainz release data;
+// Last.fm IDs can be stale, and a recording ID conflict rejects a file.
+function hasReleaseIdentity(track) {
+  return Boolean(track.trackMbid && track.albumMbid)
+    && track.durationMs > 0
+    && Number(track.trackNumber) > 0
+    && Array.isArray(track.albumTrackTitles)
+    && track.albumTrackTitles.length > 0;
+}
+
 export async function resolveTrackSearchContext(track) {
   const base = {
     ...track,
@@ -267,13 +275,18 @@ export async function resolveTrackSearchContext(track) {
   if (!base.artistName || !base.trackName) {
     return base;
   }
+  if (hasReleaseIdentity(base)) {
+    if (base.artistAliases.length === 0 && base.artistMbid) {
+      base.artistAliases = await fetchArtistAliases(base.artistMbid);
+    }
+    return base;
+  }
 
   const lastfmInfo = await fetchLastfmTrackInfo(base);
   const lastfmTrack = lastfmInfo?.track || null;
   const lastfmAlbumName = String(
     lastfmTrack?.album?.title || lastfmTrack?.album?.["#text"] || "",
   ).trim();
-  const lastfmTrackMbid = String(lastfmTrack?.mbid || "").trim();
   const lastfmArtistMbid = String(lastfmTrack?.artist?.mbid || "").trim();
   const lastfmDuration =
     lastfmTrack?.duration != null && Number.isFinite(Number(lastfmTrack.duration))
@@ -282,9 +295,6 @@ export async function resolveTrackSearchContext(track) {
 
   if (!base.albumName && lastfmAlbumName) {
     base.albumName = lastfmAlbumName;
-  }
-  if (!base.trackMbid && lastfmTrackMbid) {
-    base.trackMbid = lastfmTrackMbid;
   }
   if (!base.artistMbid && lastfmArtistMbid) {
     base.artistMbid = lastfmArtistMbid;
@@ -364,8 +374,6 @@ export async function resolveTrackSearchContext(track) {
   base.durationMs = pickResolvedDurationMs({
     playlistDurationMs: base.durationMs,
     lastfmDurationMs: lastfmDuration,
-    lastfmAlbumName,
-    albumName: base.albumName,
     matchedTrackDurationMs,
   });
 

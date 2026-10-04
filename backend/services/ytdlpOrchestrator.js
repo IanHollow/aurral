@@ -16,7 +16,7 @@ import {
   buildResolvedJobTrack as buildResolvedTrack,
   commitDownloadedFile,
   joinUnderRoot,
-  sanitizePathPart,
+  buildTrackFileName,
   writeAudioMetadata,
 } from "./downloadUtils.js";
 import { deferForInactiveOwner } from "./downloadJobs/playlistOwnerStatus.js";
@@ -25,7 +25,7 @@ import {
   hasNextCandidate,
   buildNextCandidatePayload,
   mergeSearchResults,
-  blockPipelineJobForReview,
+  holdForReview,
   finalizePipelineJobSuccess,
 } from "./pipelineHelpers.js";
 import {
@@ -223,17 +223,20 @@ async function handleYtdlpFinalize(payload, helpers) {
     return null;
   }
   if (!validation.valid) {
-    if (
-      validation.blocked &&
-      blockPipelineJobForReview({
-        downloadTracker,
-        job,
-        validation,
-        sourcePath: filePath,
-      })
-    ) {
-      return null;
+    if (validation.blocked && !payload.heldForReview) {
+      const heldPath = path.join(path.dirname(filePath), "..", `${job.id}-held${path.extname(filePath)}`);
+      await fs.rename(filePath, heldPath);
+      await ytdlpClient.cleanupStaging(job.id);
+      const heldPayload = {
+        ...payload,
+        downloadedPath: null,
+        heldForReview: holdForReview(job, { source: "ytdlp", sourcePath: heldPath, reason: validation.reason }),
+      };
+      return hasNextCandidate(payload)
+        ? buildNextCandidatePayload(heldPayload)
+        : helpers.failOrTryNextSource(heldPayload, job, heldPayload.heldForReview.reason);
     }
+    downloadTracker.recordDeniedSource(job.id, "ytdlp", candidate?.raw?.id);
     await fs.rm(filePath, { force: true }).catch(() => {});
     await ytdlpClient.cleanupStaging(job.id);
     const reason = validation.reason || "yt-dlp download failed track validation";
@@ -249,7 +252,7 @@ async function handleYtdlpFinalize(payload, helpers) {
   const destination = String(payload.destination || "").trim();
   const ext = path.extname(filePath).toLowerCase();
   const finalDir = joinUnderRoot(playlistRoot, destination);
-  const finalName = `${sanitizePathPart(job.trackName, "Unknown Track")}${ext || ".m4a"}`;
+  const finalName = buildTrackFileName(job, ext || ".m4a");
   const finalPath = path.join(finalDir, finalName);
   const committed = await withPipelineCommitLock(payload, async () => {
     await writeAudioMetadata(filePath, resolvedTrack);

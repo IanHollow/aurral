@@ -1,6 +1,6 @@
 import { downloadTracker } from "../../../services/downloadJobs/downloadTracker.js";
 import { downloadWorker } from "../../../services/downloadJobs/downloadWorker.js";
-import { startSlskdOrchestratorWorker } from "../../../services/slskdOrchestratorWorker.js";
+import { startDownloadPipelineWorker } from "../../../services/downloadPipelineWorker.js";
 import { playlistManager } from "../../../services/playlists/playlistManager.js";
 import {
   flowPlaylistConfig,
@@ -36,6 +36,7 @@ import {
 import { getLibraryTrackOwnershipBatch } from "../../../services/libraryQueryService.js";
 import { logger, safeLogDiagnostic } from "../../../services/logger.js";
 import { clearAllDownloadJobs } from "../../../services/downloadJobs/downloadCancellationService.js";
+import { wakeDownloadWorker } from "../../../services/downloadJobs/mutationGuards.js";
 import {
   isDownloadOwnerProcess,
   requestDownloadOwner,
@@ -331,7 +332,7 @@ export function registerJobs(router) {
         await pauseStaticPlaylistRetryCycle(playlistId);
       } else {
         await downloadWorker.setRetryCyclePaused(playlistId, false);
-        await downloadWorker.retryIncompletePlaylist(playlistId);
+        await wakeDownloadWorker();
       }
       return res.json({
         success: true,
@@ -377,7 +378,7 @@ export function registerJobs(router) {
 
   router.post("/worker/start", requireAdmin, async (req, res) => {
     try {
-      startSlskdOrchestratorWorker();
+      startDownloadPipelineWorker();
       await downloadWorker.start();
       res.json({ success: true, message: "Worker started" });
     } catch (error) {

@@ -59,13 +59,25 @@ The **NZBGet** card in **Settings > Download clients** has these fields:
 - **Completed download path**: the folder of finished downloads. Set it only when Aurral cannot find that folder by itself.
 - **Add NZBs paused**: sends jobs to NZBGet paused.
 
+Aurral skips NZBGet's duplicate check for the releases it sends. Upgrading tracks one at a time can grab the same album release more than once, and NZBGet would otherwise delete the repeat as a duplicate.
+
 If NZBGet runs on Windows and reports host paths, mount the parent folder in Aurral. Then add a mapping in **Settings > Download clients > Remote path mappings**, with **Applies to** set to **NZBGet**.
 
 ## Behavior
 
-Aurral watches SABnzbd or NZBGet until the download finishes. For an Aurral album, one NZB can fill several tracks. For other requests, Aurral imports the checked track into the Downloads Folder.
+Aurral searches the way Lidarr does. If an indexer supports music search by artist and album, Aurral sends it one first. Then it searches all indexers for the artist and album as text. For a track, it also searches for the artist and track title, to find singles. That is at most three Prowlarr searches for each request.
 
-When Aurral knows the artist, it searches for the artist and the album first. If that gives too few usable releases, it searches for the album title alone, then for the album and track titles together. Without an artist, Aurral starts with the album title alone. Aurral checks every release against the request and every downloaded file before it imports it.
+Aurral cleans the text first: it drops a leading "The", removes accents, and replaces punctuation with spaces, so `AC/DC` is searched as `AC DC`. A compilation is searched as `VA` with the album title, and then by the title alone.
+
+A release matches when its title contains the artist and the album or track title. A compilation release needs only the album title. A single in another version, such as a remix or a radio edit, does not match the original track. A discography, box set, bootleg, tribute, or karaoke release does not match either, and an album does not match a live or greatest-hits release, unless the request names one. Aurral checks every downloaded file before it imports it.
+
+Aurral watches SABnzbd or NZBGet for as long as the client holds the download, including while it is paused. If the download leaves the client without a history entry, Aurral tries the next release.
+
+For an Aurral album, one NZB can fill several tracks. If the NZB leaves tracks unfilled, Aurral tries the next release for those tracks before it searches for them one by one. For other requests, Aurral imports the checked track into the Downloads Folder.
+
+A release that fails to download, or that holds no file for the track, is not offered again for that track.
+
+After Aurral imports a download, or the download fails, it removes the item from the client's queue and history. SABnzbd also deletes the files that Aurral did not import. NZBGet keeps completed files on disk, so clear its completed-download folder for Aurral's category yourself.
 
 If a file matches the requested track but its duration is very different, Aurral holds it in **Activity > Queue**. You can preview, approve, or deny it.
 

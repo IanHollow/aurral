@@ -41,6 +41,7 @@ const METADATA_RATE_LIMIT_FALLBACK_COOLDOWN_MS = 5_000;
 const METADATA_RATE_LIMIT_MAX_COOLDOWN_MS = 60_000;
 const METADATA_FORBIDDEN_COOLDOWN_MS = 5 * 60_000;
 const METADATA_CACHE_MAX_ENTRIES = 20_000;
+const MIN_ALBUM_SEARCH_WINDOW = 25;
 const METADATA_REQUEST_MIN_INTERVAL_MS = 100;
 const METADATA_REQUEST_TIMEOUT_MS = 8000;
 const METADATA_MAX_QUEUED_REQUESTS = Math.floor(
@@ -333,19 +334,41 @@ function applyReleaseTypeFilter(albums, releaseTypes = []) {
   });
 }
 
-function selectedReleaseForAlbum(album) {
+function tally(releases, key) {
+  const counts = new Map();
+  for (const release of releases) counts.set(key(release), (counts.get(key(release)) || 0) + 1);
+  return counts;
+}
+
+function runningOrder(release) {
+  return [...release.tracks]
+    .sort((left, right) => (left.mediumNumber || 1) - (right.mediumNumber || 1)
+      || (left.trackNumber || 0) - (right.trackNumber || 0))
+    .map((track) => getNormalizedText(track.title))
+    .join("\n");
+}
+
+// The album is the official tracklist most of its releases share: pressings
+// of the standard edition far outnumber deluxe editions and box sets, which
+// can run to 90 tracks, and misprints that swap tracks. A tie goes to the
+// longer tracklist, and among its releases a single disc, numbered like CD
+// and digital copies, comes first.
+export function selectAlbumRelease(album) {
   const releases = Array.isArray(album?.releases) ? album.releases : [];
-  return (
-    releases.find(
-      (release) =>
-        String(release?.status || "").toLowerCase() === "official" &&
-        Array.isArray(release?.tracks) &&
-        release.tracks.length > 0,
-    ) ||
-    releases.find((release) => Array.isArray(release?.tracks) && release.tracks.length > 0) ||
-    releases[0] ||
-    null
-  );
+  const withTracks = releases.filter((release) => Array.isArray(release?.tracks) && release.tracks.length > 0);
+  const official = withTracks.filter((release) => String(release?.status || "").toLowerCase() === "official");
+  const pool = official.length > 0 ? official : withTracks;
+  if (pool.length === 0) return releases[0] || null;
+  const [trackCount] = [...tally(pool, (release) => release.tracks.length)]
+    .sort(([leftCount, left], [rightCount, right]) => right - left || rightCount - leftCount)[0];
+  const sameCount = pool.filter((release) => release.tracks.length === trackCount);
+  const orders = new Map(sameCount.map((release) => [release, runningOrder(release)]));
+  const orderCounts = tally(sameCount, (release) => orders.get(release));
+  const discs = (release) => new Set(release.tracks.map((track) => track.mediumNumber || 1)).size;
+  return sameCount.reduce((best, release) => {
+    const commoner = orderCounts.get(orders.get(release)) - orderCounts.get(orders.get(best));
+    return commoner > 0 || (commoner === 0 && discs(release) < discs(best)) ? release : best;
+  });
 }
 
 function storeAlbumReleaseMappings(album) {
@@ -370,7 +393,7 @@ export async function getAlbumByMbid(albumMbid, { signal, forceRefresh = false }
 
 export async function getAlbumTracksByAlbumMbid(albumMbid) {
   const album = await getAlbumByMbid(albumMbid);
-  const release = selectedReleaseForAlbum(album);
+  const release = selectAlbumRelease(album);
   return Array.isArray(release?.tracks) ? release.tracks : [];
 }
 
@@ -400,7 +423,10 @@ export async function searchAlbums(
   query,
   { artistName = "", limit = 24, offset = 0, releaseTypes = [], sort = "relevance", signal } = {},
 ) {
-  const requestedLimit = Math.max(limit + offset, limit);
+  // Relevance ranking reorders what the provider returns, so a short list
+  // still looks at enough results to find the album. One more than the page
+  // shows whether another page exists.
+  const requestedLimit = Math.max(limit + offset + 1, MIN_ALBUM_SEARCH_WINDOW);
   let items = [];
 
   try {
@@ -412,7 +438,8 @@ export async function searchAlbums(
     const source = Array.isArray(data) ? data : [];
     items = source.map((entry, index) => {
       const artists = Array.isArray(entry?.artists) ? entry.artists : [];
-      const primaryArtist = artists[0] ? toNormalizedArtist(artists[0]) : null;
+      const credited = artists.find((artist) => artist?.id && artist.id === entry?.artistid) || artists[0];
+      const primaryArtist = credited ? toNormalizedArtist(credited) : null;
       const coverImage = selectBestAlbumImage(entry?.images);
       return {
         id: entry?.id,

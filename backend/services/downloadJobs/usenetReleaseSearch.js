@@ -8,11 +8,13 @@
 
 import path from "path";
 import {
+  foldDiacritics,
   normalizeReleaseText as normalizeText,
   normalizeTitle,
-  scoreTextMatch,
   getYear,
 } from "../providers/brainzmashRanking.js";
+import { coreAlbumTitle, isVariousArtistsCredit, otherProductMarker } from "../trackMatching/titleText.js";
+import { checkVariantCompatibility } from "../trackMatching/semanticPolicy.js";
 
 const AUDIO_CATEGORY_MIN = 3000;
 const AUDIO_CATEGORY_MAX = 3999;
@@ -96,25 +98,56 @@ function releaseKey(release) {
     .join("\0");
 }
 
-function artistPresent(title, context) {
-  const titleNorm = normalizeTitle(title);
-  const candidates = [context?.artistName, ...(context?.artistAliases || [])]
-    .map((a) => String(a || "").trim())
+function titleWords(value) {
+  return foldDiacritics(String(value || ""))
+    .toLowerCase()
+    .replace(/&/gu, " and ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .split(" ")
     .filter(Boolean);
-  return candidates.some((name) => {
-    const stripped = normalizeTitle(name);
-    if (stripped && titleNorm.includes(stripped)) return true;
-    if (!stripped) {
-      const tokens = normalizeText(name).split(" ").filter(Boolean);
-      const titleTokens = normalizeText(title).split(" ").filter(Boolean);
-      return tokens.length > 0 && tokens.every((t) => titleTokens.includes(t));
-    }
-    return false;
-  });
+}
+
+// True when the phrase's words appear in a row in the release title. A
+// release title adds the year, format, and group around the artist and
+// album, so the whole-title similarity used before rejected short albums:
+// "Lemonade" in "Beyonce feat. Kendrick Lamar - Lemonade (2016) MP3".
+function containsPhrase(words, phrase) {
+  const target = titleWords(phrase);
+  if (target.length === 0) return false;
+  for (let start = 0; start + target.length <= words.length; start += 1) {
+    if (target.every((word, offset) => words[start + offset] === word)) return true;
+  }
+  return false;
+}
+
+function withoutCredits(title) {
+  return String(title || "")
+    .replace(/\s*[[(][^\])]*[\])]/gu, " ")
+    .replace(/\s+(?:feat\.?|ft\.?|featuring)\s+.+$/iu, "")
+    .trim();
+}
+
+function readReleaseRequest(context) {
+  const compilation = context?.compilation === true || isVariousArtistsCredit(context?.artistName);
+  const artists = (compilation ? creditedArtists(context) : [context?.artistName, ...(context?.artistAliases || [])])
+    .map((name) => String(name || "").trim())
+    .filter(Boolean)
+    .flatMap((name) => [name, name.replace(/^the\s+/iu, "")]);
+  const albumName = readComparableAlbumName(context);
+  const trackName = String(context?.trackName || "").trim();
+  return {
+    compilation,
+    artists,
+    albumName,
+    albums: [albumName, coreAlbumTitle(albumName)].filter(Boolean),
+    trackName,
+    tracks: [trackName, withoutCredits(trackName)].filter(Boolean),
+  };
 }
 
 export function rankUsenetReleases(releases, context, options = {}) {
-  const albumName = readComparableAlbumName(context);
+  const request = readReleaseRequest(context);
   const expectedYear = getYear(context?.releaseYear);
   const seen = new Set();
   const ranked = [];
@@ -125,32 +158,32 @@ export function rankUsenetReleases(releases, context, options = {}) {
     if (seen.has(key)) continue;
     seen.add(key);
     const title = release.title;
+    const raw = { release, file: title, size: Number(release.size || 0), downloadUrl: release.downloadUrl,
+      indexerId: release.indexerId, indexer: release.indexer, guid: release.guid };
+    const words = titleWords(title);
 
-    // Identity gate: must have artist AND (track OR album)
-    if (!hasAudioCategory(release)) {
+    // Identity gate: the artist (any artist for a compilation) and the album
+    // or track title appear in the release title.
+    const hasAlbum = request.albums.some((album) => containsPhrase(words, album));
+    const hasArtist = (request.compilation && hasAlbum)
+      || request.artists.some((name) => containsPhrase(words, name));
+    const hasTrack = request.tracks.some((track) => containsPhrase(words, track));
+    // A single or track release must be the requested version: a remix or
+    // radio edit of the track is not downloaded for the original.
+    const otherVersion = hasTrack
+      && !checkVariantCompatibility({ trackName: request.trackName }, { title }).compatible;
+    const otherProduct = otherProductMarker(title,
+      [request.albumName, request.trackName, ...request.artists], { album: hasAlbum });
+    const admissible = hasAudioCategory(release) && hasArtist && (hasAlbum || hasTrack)
+      && !otherVersion && !otherProduct;
+    if (!admissible) {
       ranked.push({
-        raw: { release, file: title, size: Number(release.size || 0), downloadUrl: release.downloadUrl, indexerId: release.indexerId, indexer: release.indexer, guid: release.guid },
+        raw,
         score: 0,
         resolvedAlbumName: null,
         releaseAdmissible: false,
-        scores: { artist: 0, track: 0, album: 0, year: 0, format: 0, size: 0 },
-      });
-      continue;
-    }
-
-    const hasArtist = artistPresent(title, context);
-    const trackScore = scoreTextMatch(title, context?.trackName);
-    const albumScore = albumName ? scoreTextMatch(title, albumName) : 0;
-    const hasTrack = trackScore >= 45;
-    const hasAlbum = albumScore >= 65;
-
-    if (!hasArtist || !(hasTrack || hasAlbum)) {
-      ranked.push({
-        raw: { release, file: title, size: Number(release.size || 0), downloadUrl: release.downloadUrl, indexerId: release.indexerId, indexer: release.indexer, guid: release.guid },
-        score: 0,
-        resolvedAlbumName: null,
-        releaseAdmissible: false,
-        scores: { artist: hasArtist ? 100 : 0, track: trackScore, album: albumScore, year: 0, format: 0, size: 0 },
+        scores: { artist: hasArtist ? 100 : 0, track: hasTrack ? 100 : 0, album: hasAlbum ? 100 : 0,
+          year: 0, format: 0, size: 0 },
       });
       continue;
     }
@@ -164,11 +197,12 @@ export function rankUsenetReleases(releases, context, options = {}) {
     const tieScore = yearScore + formatScore + sizeScore + noiseScore + yearPenalty;
 
     ranked.push({
-      raw: { release, file: title, size: Number(release.size || 0), downloadUrl: release.downloadUrl, indexerId: release.indexerId, indexer: release.indexer, guid: release.guid },
+      raw,
       score: tieScore,
-      resolvedAlbumName: hasAlbum ? albumName : null,
+      resolvedAlbumName: hasAlbum ? request.albumName : null,
       releaseAdmissible: true,
-      scores: { artist: 100, track: trackScore, album: albumScore, year: yearScore, format: formatScore, size: sizeScore },
+      scores: { artist: 100, track: hasTrack ? 100 : 0, album: hasAlbum ? 100 : 0,
+        year: yearScore, format: formatScore, size: sizeScore },
     });
   }
   return ranked.sort((left, right) => {
@@ -203,6 +237,54 @@ export function selectRankedUsenetCandidates(ranked, limit = 5) {
     selected.push(candidate);
   }
   return selected;
+}
+
+const PROWLARR_MUSIC_QUERY = /^\{artist:/iu;
+
+// Lidarr's query title: no leading "The", no accents, and each run of
+// characters other than letters, digits, and apostrophes becomes a space.
+// "AC/DC Back in Black" found 2 releases on a test indexer set; "AC DC Back
+// in Black" found 75.
+export function newznabQueryText(value) {
+  const text = foldDiacritics(String(value || ""))
+    .replace(/[\u0060\u00B4\u2018\u2019]/gu, "'")
+    .replace(/[^\p{L}\p{N}']+/gu, " ")
+    .replace(/^the\s+/iu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text || String(value || "").trim();
+}
+
+// Lidarr's plan: a Newznab music search when an indexer supports it, then
+// one "Artist Album" text search. A track also tries "Artist Title" for a
+// single. A compilation is listed as "VA" or by its title alone.
+// A compilation track's job names the track's own artist as an alias.
+function creditedArtists(context) {
+  return (context?.artistAliases || [])
+    .map((name) => String(name || "").trim())
+    .filter((name) => name && !isVariousArtistsCredit(name));
+}
+
+export function buildUsenetSearchQueries(context, { musicSearch = false, albumGrab = false } = {}) {
+  const compilation = context?.compilation === true || isVariousArtistsCredit(context?.artistName);
+  const artist = compilation ? "VA" : newznabQueryText(context?.artistName);
+  const trackArtist = compilation ? newznabQueryText(creditedArtists(context)[0]) : artist;
+  const album = context?.albumName ? newznabQueryText(coreAlbumTitle(context.albumName)) : "";
+  const track = albumGrab ? "" : newznabQueryText(context?.trackName);
+  const year = album && artist.toLowerCase() === album.toLowerCase() ? getYear(context?.releaseYear) : null;
+  const join = (...parts) => parts.filter(Boolean).join(" ");
+  const queries = [];
+  if (musicSearch && !compilation && artist && album) {
+    queries.push(`{artist:${artist}}{album:${album}}${year ? `{year:${year}}` : ""}`);
+  }
+  if (artist && album) queries.push(join(artist, album, year));
+  if (compilation && album) queries.push(album);
+  if (trackArtist && track) queries.push(join(trackArtist, track));
+  return [...new Set(queries)];
+}
+
+export function isProwlarrMusicQuery(query) {
+  return PROWLARR_MUSIC_QUERY.test(String(query || ""));
 }
 
 export function isAudioFile(filePath) {

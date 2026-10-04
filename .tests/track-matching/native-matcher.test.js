@@ -219,6 +219,20 @@ test("release context assigns a numbered file with no title only when position a
   assert.deepEqual(assignReleaseFiles(tracks, files).unassignedTrackIndexes, [1]);
 });
 
+test("a listing without lengths fits when exact titles sit at their positions", () => {
+  const tracks = ["First Song", "Second Song", "Third Song"].map((title, index) => ({
+    title, artists: ["The Band"], durationMs: 180000 + index * 10000, trackNumber: index + 1,
+  }));
+  const files = tracks.map(({ title, trackNumber }) => ({ title, trackNumber }));
+  assert.equal(assessRelease({ tracks }, { files }).decision, "selectable");
+  const shuffled = [
+    { title: "First Song", trackNumber: 2 },
+    { title: "Second Song", trackNumber: 3 },
+    { title: "Third Song", trackNumber: 1 },
+  ];
+  assert.equal(assessRelease({ tracks }, { files: shuffled }).decision, "skip");
+});
+
 test("every three-track file order keeps a one-to-one assignment", () => {
   const tracks = ["Alpha", "Bravo", "Charlie"].map((title, index) => ({
     title, durationMs: 180000 + index * 10000,
@@ -258,7 +272,7 @@ test("post-download verification requires corroboration and rejects original tag
   }).decision, "matched");
 });
 
-test("release session requires the requested slot and abstains between equal folders", () => {
+test("release session requires the requested slot and lets the caller order equal folders", () => {
   const release = { key: "release", tracks: [
     { title: "First Song", artists: ["The Band"], durationMs: 180000, recordingMbid: "first" },
     { title: "Second Song", artists: ["The Band"], durationMs: 200000, recordingMbid: "second" },
@@ -275,6 +289,20 @@ test("release session requires the requested slot and abstains between equal fol
     requestedRecordingMbid: "second" }).selected?.folder.key, "good");
   assert.equal(selectReleaseSession({ releases: [release], folders: [wrongSlot],
     requestedRecordingMbid: "second" }).decision, "skip");
-  assert.equal(selectReleaseSession({ releases: [release], folders: [good, { ...good, key: "copy" }],
-    requestedRecordingMbid: "second" }).decision, "uncertain");
+  const copies = [good, { ...good, key: "copy" }];
+  assert.equal(selectReleaseSession({ releases: [release], folders: copies,
+    requestedRecordingMbid: "second" }).selected.folder.key, "good");
+  assert.equal(selectReleaseSession({ releases: [release], folders: copies,
+    requestedRecordingMbid: "second",
+    compare: (left, right) => right.folderIndex - left.folderIndex }).selected.folder.key, "copy");
+});
+
+test("a Various Artists credit on the request neither conflicts with nor confirms an artist", () => {
+  const wanted = { title: "Hooked on a Feeling", artists: ["Various Artists"], durationMs: 173000 };
+  const file = { title: "Hooked on a Feeling", artists: ["Blue Swede"], durationMs: 173000 };
+  assert.notEqual(verifyDownloadedRecording(wanted, file).decision, "no_match");
+  assert.equal(verifyDownloadedRecording({ ...wanted, recordingMbid: "hooked" },
+    { ...file, recordingMbid: "hooked" }).decision, "matched");
+  assert.equal(decideRecording(wanted, [{ ...file, artists: ["A Cover Band"] }]).decision, "uncertain");
+  assert.equal(decideRecording({ ...wanted, artistAliases: ["Blue Swede"] }, [file]).decision, "selectable");
 });
