@@ -181,7 +181,6 @@ async function runFlowSeed({
     recordFlowGenerationStarted({ flowId: safeFlowId });
     playlistManager.updateConfig(false);
     await playlistManager.clearFlowFiles([safeFlowId]);
-    downloadWorker.clearPlaylistRunState(safeFlowId);
     downloadTracker.clearAllForOwner(safeFlowId);
 
     if (!isLatestPlaylistOperationToken(tokenScope, token)) {
@@ -260,7 +259,6 @@ async function runFlowCleanup({ flowId, tokenScope = null, token = null } = {}) 
     }
     playlistManager.updateConfig(false);
     await playlistManager.clearFlowFiles([safeFlowId]);
-    downloadWorker.clearPlaylistRunState(safeFlowId);
     downloadTracker.clearAllForOwner(safeFlowId);
   });
   rescanLibraryForFlows([safeFlowId]);
@@ -283,7 +281,6 @@ async function deleteFlow({ flowId, tokenScope = null, token = null } = {}) {
       return;
     }
     downloadWorker.setRetryCyclePaused(safeFlowId, false);
-    downloadWorker.clearPlaylistRunState(safeFlowId);
     playlistManager.updateConfig(false);
     await playlistManager.deletePlaybackPlaylist(flow);
     await playlistManager.clearFlowFiles([safeFlowId], { protectPlayback: false });

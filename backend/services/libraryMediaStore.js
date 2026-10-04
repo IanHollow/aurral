@@ -2,6 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { db, dbHelpers } from "../config/db-sqlite.js";
 import { invalidateLibraryQueryCache } from "./libraryQueryService.js";
+import { isVariousArtistsCredit } from "./trackMatching/titleText.js";
+import { clearLibraryManagement } from "./libraryManagementStore.js";
 import {
   removeLibrarySearchDocument,
   syncLibrarySearchAlbum,
@@ -485,11 +487,16 @@ export function upsertLibraryTrack({
   let libraryChanged = false;
   const track = db.transaction(() => {
     const existing = db.prepare("SELECT * FROM library_tracks WHERE identity_key = ?").get(key);
+    // "Various Artists" credits a compilation, not a performer, so it never
+    // replaces a track's own artist.
+    const nextArtistName = existing?.artist_name && isVariousArtistsCredit(trackArtistName)
+      ? existing.artist_name
+      : trackArtistName;
     if (
       existing &&
       (trackMbid == null || trackMbid === existing.mbid) &&
       trackTitle === existing.title &&
-      (trackArtistName == null || trackArtistName === existing.artist_name) &&
+      (nextArtistName == null || nextArtistName === existing.artist_name) &&
       (metadataText == null || metadataText === existing.metadata_json)
     ) {
       if (syncSearch) syncLibrarySearchTrack(existing.id);
@@ -504,7 +511,7 @@ export function upsertLibraryTrack({
          artist_name = COALESCE(excluded.artist_name, library_tracks.artist_name),
          metadata_json = COALESCE(excluded.metadata_json, library_tracks.metadata_json),
          updated_at = excluded.updated_at`,
-    ).run(key, trackMbid, trackTitle, trackArtistName, metadataText, monitored ? 1 : 0, timestamp, timestamp);
+    ).run(key, trackMbid, trackTitle, nextArtistName, metadataText, monitored ? 1 : 0, timestamp, timestamp);
     libraryChanged = true;
     const row = db.prepare("SELECT * FROM library_tracks WHERE identity_key = ?").get(key);
     if (syncSearch) syncLibrarySearchTrack(row?.id);
@@ -520,14 +527,23 @@ const touchLibraryAlbum = (albumId) => {
   db.prepare("UPDATE library_albums SET updated_at = ? WHERE id = ?").run(now(), Number(albumId));
 };
 
+// A scan passes keepPosition: a file whose tags number it differently from
+// the release the album was requested with stays at the track's position.
 export function linkLibraryAlbumTrack({
   albumId,
   trackId,
   discNumber = 1,
   trackNumber = 0,
+  keepPosition = false,
   syncSearch = true,
 }) {
   const changed = db.transaction(() => {
+    if (keepPosition && db.prepare(
+      "SELECT 1 FROM library_album_tracks WHERE album_id = ? AND track_id = ? LIMIT 1",
+    ).get(Number(albumId), Number(trackId))) {
+      if (syncSearch) syncLibrarySearchTrack(trackId);
+      return false;
+    }
     const result = db.prepare(
       `INSERT OR IGNORE INTO library_album_tracks
         (album_id, track_id, disc_number, track_number, created_at)
@@ -538,6 +554,60 @@ export function linkLibraryAlbumTrack({
     return result.changes > 0;
   })();
   if (changed) invalidateLibraryCache();
+}
+
+// A scan stores a file's release ID in its album's mbid. A release ID used
+// as a release group names that album, not a new one.
+export function findLibraryAlbumByReleaseMbid(mbid) {
+  const releaseMbid = normalizeText(mbid);
+  if (!releaseMbid) return null;
+  return db.prepare(
+    `SELECT * FROM library_albums
+     WHERE mbid = ? AND release_group_mbid IS NOT NULL AND release_group_mbid != mbid
+     ORDER BY id LIMIT 1`,
+  ).get(releaseMbid) || null;
+}
+
+// Downloads once took an album's release ID for its release group, and the
+// scan filed them under a second album keyed by that release ID. Each such
+// album folds into the album the release belongs to.
+export function mergeReleaseKeyedLibraryAlbums() {
+  const pairs = db.prepare(
+    `SELECT duplicate.id AS duplicateId, duplicate.identity_key AS duplicateKey,
+       album.id AS albumId, album.identity_key AS albumKey
+     FROM library_albums AS album
+     JOIN library_albums AS duplicate ON duplicate.identity_key = 'release-group:' || album.mbid
+     WHERE album.mbid IS NOT NULL AND album.release_group_mbid IS NOT NULL
+       AND album.mbid != album.release_group_mbid AND duplicate.id != album.id`,
+  ).all();
+  if (pairs.length === 0) return 0;
+  db.transaction(() => {
+    for (const pair of pairs) {
+      db.prepare(
+        `INSERT OR IGNORE INTO library_album_tracks (album_id, track_id, disc_number, track_number, created_at)
+         SELECT ?, link.track_id, link.disc_number, link.track_number, link.created_at
+         FROM library_album_tracks AS link
+         WHERE link.album_id = ? AND NOT EXISTS (
+           SELECT 1 FROM library_album_tracks AS kept WHERE kept.album_id = ? AND kept.track_id = link.track_id
+         )`,
+      ).run(pair.albumId, pair.duplicateId, pair.albumId);
+      db.prepare("UPDATE library_media_files SET album_id = ? WHERE album_id = ?").run(pair.albumId, pair.duplicateId);
+      db.prepare(
+        `INSERT OR IGNORE INTO subsonic_stars (user_id, entity_kind, entity_key, created_at)
+         SELECT user_id, entity_kind, ?, created_at FROM subsonic_stars
+         WHERE entity_kind = 'album' AND entity_key = ?`,
+      ).run(pair.albumKey, pair.duplicateKey);
+      db.prepare("DELETE FROM subsonic_stars WHERE entity_kind = 'album' AND entity_key = ?").run(pair.duplicateKey);
+      db.prepare("DELETE FROM library_album_tracks WHERE album_id = ?").run(pair.duplicateId);
+      clearLibraryManagement("album", pair.duplicateId);
+      db.prepare("DELETE FROM library_albums WHERE id = ?").run(pair.duplicateId);
+      removeLibrarySearchDocument("album", pair.duplicateId);
+      touchLibraryAlbum(pair.albumId);
+    }
+  })();
+  for (const pair of pairs) syncLibrarySearchAlbum(pair.albumId);
+  invalidateLibraryCache();
+  return pairs.length;
 }
 
 export function removeLibraryTrackIfNoAvailableMedia(trackId) {

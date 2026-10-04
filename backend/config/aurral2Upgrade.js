@@ -231,18 +231,14 @@ function moveStaticPlaylistJobsIntoLibrary(db) {
     db.prepare("DELETE FROM weekly_flow_download_provider_work WHERE job_id = ?").run(jobId);
   }
   if (!hasTable(db, "_honker_live")) return;
-  for (const row of db.prepare("SELECT id, queue, payload FROM _honker_live WHERE queue IN ('slskd-pipeline', 'playlist-retry')").all()) {
+  for (const row of db.prepare("SELECT id, payload FROM _honker_live WHERE queue = 'slskd-pipeline'").all()) {
     let payload;
     try {
       payload = JSON.parse(row.payload);
     } catch {
       continue;
     }
-    if (row.queue === "playlist-retry") {
-      if (isMoved(payload?.playlistType || payload?.playlistId)) {
-        db.prepare("DELETE FROM _honker_live WHERE id = ?").run(row.id);
-      }
-    } else if (deletedJobIds.has(payload?.jobId)) {
+    if (deletedJobIds.has(payload?.jobId)) {
       db.prepare("DELETE FROM _honker_live WHERE id = ?").run(row.id);
     } else if (movedJobIds.has(payload?.jobId) && isMoved(payload.playlistId)) {
       db.prepare("UPDATE _honker_live SET payload = ? WHERE id = ?").run(
@@ -264,11 +260,6 @@ const renamePrefix = (value, from, to) =>
   typeof value === "string" && value.startsWith(from) ? `${to}${value.slice(from.length)}` : value;
 
 function renameQueuedWork(db) {
-  const flowIds = new Set(readJsonSetting(db, "flows", []).map((flow) => flow?.id).filter(Boolean));
-  const retryJobs = readJsonSetting(db, "weeklyFlowIncompleteRetryJobs", {});
-  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('incompleteRetryJobs', ?)").run(JSON.stringify(
-    Object.fromEntries(Object.entries(retryJobs).filter(([owner]) => owner === LIBRARY_OWNER || flowIds.has(owner))),
-  ));
   const insertToken = db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)");
   for (const row of db.prepare("SELECT key, value FROM settings WHERE key GLOB 'weeklyFlowOperationTokens:*'").all()) {
     insertToken.run(renamePrefix(row.key, "weeklyFlowOperationTokens:", "playlistOperationTokens:"), row.value);
@@ -278,6 +269,7 @@ function renameQueuedWork(db) {
   }
   db.prepare("DELETE FROM settings WHERE key GLOB 'weeklyFlowOperationTokens*' OR key = 'weeklyFlowIncompleteRetryJobs'").run();
   if (!hasTable(db, "_honker_live")) return;
+  db.prepare("DELETE FROM _honker_live WHERE queue IN ('playlist-retry', 'playlist-reserve-build')").run();
   db.prepare("UPDATE _honker_live SET queue = 'playlist-operation' WHERE queue = 'weekly-flow-operation'").run();
   db.prepare(`
     UPDATE _honker_live SET queue = 'release-metadata-refresh', state = 'pending', worker_id = NULL, claim_expires_at = NULL
@@ -348,7 +340,7 @@ function renameDownloadTables(db) {
   }
   if (!hasTable(db, "_honker_live")) return;
   const updatePayload = db.prepare("UPDATE _honker_live SET payload = ? WHERE id = ?");
-  for (const row of db.prepare("SELECT id, queue, payload FROM _honker_live WHERE queue IN ('slskd-pipeline', 'playlist-retry')").all()) {
+  for (const row of db.prepare("SELECT id, payload FROM _honker_live WHERE queue = 'slskd-pipeline'").all()) {
     let payload;
     try {
       payload = JSON.parse(row.payload);
@@ -356,11 +348,8 @@ function renameDownloadTables(db) {
       continue;
     }
     if (!payload || typeof payload !== "object") continue;
-    const { playlistId, playlistGeneration, playlistType, ...rest } = payload;
-    const next = row.queue === "playlist-retry"
-      ? { ...rest, ownerId: playlistType || playlistId }
-      : { ...rest, ownerId: playlistId, ownerGeneration: playlistGeneration };
-    updatePayload.run(JSON.stringify(next), row.id);
+    const { playlistId, playlistGeneration, ...rest } = payload;
+    updatePayload.run(JSON.stringify({ ...rest, ownerId: playlistId, ownerGeneration: playlistGeneration }), row.id);
   }
 }
 

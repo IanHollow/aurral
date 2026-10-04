@@ -142,28 +142,17 @@ function positiveMs(value) {
     : null;
 }
 
+// The length of the matched MusicBrainz release track, then the length the
+// request carried. Last.fm lengths are often a radio edit, so they only fill
+// a gap.
 export function pickResolvedDurationMs({
   playlistDurationMs = null,
   lastfmDurationMs = null,
-  lastfmAlbumName = "",
-  albumName = "",
   matchedTrackDurationMs = null,
 } = {}) {
-  let duration = positiveMs(playlistDurationMs);
-  const lastfm = positiveMs(lastfmDurationMs);
-  const matched = positiveMs(matchedTrackDurationMs);
-  const lastfmAlbumMatches =
-    Boolean(albumName) &&
-    Boolean(lastfmAlbumName) &&
-    scoreTextMatch(lastfmAlbumName, albumName, { extended: true }) >= 85;
-  if (lastfm) {
-    if (!duration) {
-      duration = lastfm;
-    } else if (lastfmAlbumMatches) {
-      duration = lastfm;
-    }
-  }
-  return matched && !lastfmAlbumMatches ? matched : duration || matched;
+  return positiveMs(matchedTrackDurationMs)
+    || positiveMs(playlistDurationMs)
+    || positiveMs(lastfmDurationMs);
 }
 
 export function getYear(value) {
@@ -242,9 +231,15 @@ export function rankAlbumCandidates(
 ) {
   const normalizedArtist = normalizeText(artistName);
   const targetYear = getYear(releaseYear);
+  // A free-text search such as "Fleetwood Mac Rumours" names the artist and
+  // the title together.
+  const titleScore = (candidate) => Math.max(
+    scoreTextMatch(candidate?.title, albumTitle),
+    normalizedArtist ? 0 : scoreTextMatch(`${candidate?.artistName || ""} ${candidate?.title || ""}`, albumTitle),
+  );
   return [...candidates].sort((left, right) => {
-    const leftTitleScore = scoreTextMatch(left?.title, albumTitle);
-    const rightTitleScore = scoreTextMatch(right?.title, albumTitle);
+    const leftTitleScore = titleScore(left);
+    const rightTitleScore = titleScore(right);
     if (leftTitleScore !== rightTitleScore) {
       return rightTitleScore - leftTitleScore;
     }
@@ -268,6 +263,10 @@ export function rankAlbumCandidates(
     const leftTypeRank = typeRank(left?.type);
     const rightTypeRank = typeRank(right?.type);
     if (leftTypeRank !== rightTypeRank) return leftTypeRank - rightTypeRank;
+
+    const leftSecondary = (left?.secondaryTypes || []).length > 0 ? 1 : 0;
+    const rightSecondary = (right?.secondaryTypes || []).length > 0 ? 1 : 0;
+    if (leftSecondary !== rightSecondary) return leftSecondary - rightSecondary;
 
     const leftBootleg = bootlegPenalty(left);
     const rightBootleg = bootlegPenalty(right);

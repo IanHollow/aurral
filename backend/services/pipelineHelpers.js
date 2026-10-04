@@ -1,5 +1,11 @@
 import { logger } from "./logger.js";
 
+// Fields of a search in progress; a new search or a download clears them.
+export const SEARCH_RESET = Object.freeze({
+  searchQueries: null,
+  searchQueryIndex: 0,
+  activeSearch: null,
+});
 export function getPayloadCandidate(payload) {
   const candidateIndex = Number(payload?.candidateIndex || 0);
   return (
@@ -35,6 +41,28 @@ export function mergeSearchResults(aggregated, seen, items, buildKey) {
     seen.add(key);
     aggregated.push(item);
   }
+}
+
+const HELD_METADATA_KEYS = [
+  "downloadSource",
+  "downloadClient",
+  "downloadClientId",
+  "releaseGuid",
+  "releaseTitle",
+  "remoteUsername",
+  "remoteFilename",
+];
+
+// A file that needs review waits while the other candidates and sources are
+// tried. It keeps the job's source details so a denial blocks that file.
+export function holdForReview(job, { source, sourcePath, reason, ...details }) {
+  return {
+    ...details,
+    source,
+    sourcePath,
+    reason: reason || "Blocked for review",
+    metadata: Object.fromEntries(HELD_METADATA_KEYS.map((key) => [key, job?.[key] ?? null])),
+  };
 }
 
 export function blockPipelineJobForReview({

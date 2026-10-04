@@ -2,6 +2,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import fs from "fs/promises";
+import { isVariousArtistsCredit } from "./trackMatching/titleText.js";
 
 const execFileAsync = promisify(execFile);
 const AURRAL_IDENTITY_PREFIX = "AURRAL_IDS=";
@@ -11,6 +12,14 @@ export function sanitizePathPart(value, fallback = "Unknown") {
     .replace(/[<>:"/\\|?*]/g, "_")
     .trim();
   return text || fallback;
+}
+
+// "07 - Title.flac" when the album position is known, so a folder lists in
+// album order and two tracks with one title keep distinct names.
+export function buildTrackFileName(job, ext) {
+  const title = sanitizePathPart(job?.trackName, "Unknown Track");
+  const position = normalizePositiveInteger(job?.trackNumber);
+  return `${position ? `${String(position).padStart(2, "0")} - ` : ""}${title}${ext}`;
 }
 
 export function normalizePositiveInteger(value) {
@@ -204,13 +213,17 @@ async function rewriteAudioTags(filePath, tags) {
   }
 }
 
+// A compilation's tracks keep their own performer as the artist.
 export async function writeAudioMetadata(filePath, metadata = {}) {
+  const performer = isVariousArtistsCredit(metadata.artistName, metadata.artistMbid)
+    ? metadata.artistAliases?.[0]
+    : null;
   const tags = [
     ["title", metadata.trackName],
-    ["artist", metadata.artistName],
+    ["artist", performer || metadata.artistName],
     ["album_artist", metadata.artistName],
     ["album", metadata.albumName],
-    ["musicbrainz_artistid", metadata.artistMbid],
+    ["musicbrainz_artistid", performer ? null : metadata.artistMbid],
     ["musicbrainz_albumartistid", metadata.artistMbid],
     ["musicbrainz_albumid", metadata.albumMbid],
     ["musicbrainz_releasegroupid", metadata.albumMbid],

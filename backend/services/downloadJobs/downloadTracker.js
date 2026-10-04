@@ -304,6 +304,20 @@ function buildPipelinePayload(job) {
   };
 }
 
+function discardReviewFiles(jobs) {
+  const held = jobs.filter((job) => job?.status === "blocked" && job.stagingPath);
+  if (held.length === 0) return;
+  import("./reviewFiles.js")
+    .then(async ({ discardReviewFile }) => {
+      for (const job of held) await discardReviewFile(job);
+    })
+    .catch((error) => {
+      logger.warn("downloads", "Could not remove files held for review", {
+        reason: error?.message || String(error),
+      });
+    });
+}
+
 export class DownloadTracker {
   constructor({ enqueuePipeline = enqueuePipelineJob } = {}) {
     this.enqueuePipeline = enqueuePipeline;
@@ -1052,6 +1066,7 @@ export class DownloadTracker {
   removeJob(id) {
     const job = this.jobs.get(id);
     if (!job) return false;
+    discardReviewFiles([job]);
     cancelDownloadJob(id);
     this.clearSlskdPipelineState(id);
     this.jobs.delete(id);
@@ -1500,6 +1515,7 @@ export class DownloadTracker {
         toDelete.push(id);
       }
     }
+    discardReviewFiles(toDelete.map((id) => this.jobs.get(id)));
     cancelDownloadJobs(toDelete);
     for (const id of toDelete) {
       this.jobs.delete(id);
@@ -1540,6 +1556,7 @@ export class DownloadTracker {
 
   clearAll() {
     const count = this.jobs.size;
+    discardReviewFiles([...this.jobs.values()]);
     this.jobs.clear();
     this.statsByOwner.clear();
     this.globalStats = this._emptyStats();

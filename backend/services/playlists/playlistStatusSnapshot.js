@@ -266,7 +266,6 @@ export function getPlaylistStatusSnapshot({
     staticPlaylistStats[playlistId] = scopedStats[playlistId] || aggregateStats({}, []);
   }
   const retryCyclePausedByPlaylist = downloadWorker.getRetryCyclePausedMap(flowIds);
-  const retryCycleScheduledByPlaylist = downloadWorker.getIncompleteRetryMap(flowIds);
   return {
     worker: {
       ...workerStatus,
@@ -281,7 +280,6 @@ export function getPlaylistStatusSnapshot({
     staticPlaylists: staticPlaylistsWithOwners,
     capabilities: getFlowCapabilities(),
     retryCyclePausedByPlaylist,
-    retryCycleScheduledByPlaylist,
     operationQueue,
     operationWorker,
     hint: {

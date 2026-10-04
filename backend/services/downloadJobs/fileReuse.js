@@ -16,6 +16,7 @@ import { scheduleLibraryScan as scheduleLibraryScanJob } from "../libraryScanWor
 import {
   commitDownloadedFile,
   joinUnderRoot,
+  normalizePositiveInteger,
   sanitizePathPart,
 } from "../downloadUtils.js";
 import {
@@ -138,6 +139,15 @@ function sanitizeSafeSegment(value, fallback = "Unknown") {
   return text;
 }
 
+// Downloads are named "Title" or, with a known album position, "07 - Title".
+// An album can repeat a title, so a known position must match too.
+function isTrackFileBaseName(baseName, title, trackNumber) {
+  if (baseName === title) return true;
+  const position = baseName.endsWith(` - ${title}`)
+    && /^(\d{2,3}) - $/.exec(baseName.slice(0, -title.length));
+  return Boolean(position) && (!trackNumber || Number(position[1]) === trackNumber);
+}
+
 /**
  * Scans local storage directories to locate an existing audio file matching track metadata.
  *
@@ -153,6 +163,7 @@ async function findLocalExistingSource(track, options = {}) {
   const artistDir = sanitizeSafeSegment(track?.artistName, "Unknown Artist");
   const albumDir = sanitizeSafeSegment(track?.albumName, "Unknown Album");
   const expectedBaseName = sanitizeSafeSegment(track?.trackName, "Unknown Track");
+  const trackNumber = normalizePositiveInteger(track?.trackNumber);
   const destinationDir = isFlowOwner(targetOwnerId)
     ? path.resolve(root, AURRAL_FLOWS_DIR, targetOwnerId, artistDir, albumDir)
     : path.resolve(root, artistDir, albumDir);
@@ -163,7 +174,7 @@ async function findLocalExistingSource(track, options = {}) {
       for (const file of files) {
         const ext = path.extname(file).toLowerCase();
         const baseName = path.basename(file, ext);
-        if (baseName === expectedBaseName && VALID_AUDIO_EXTENSIONS.has(ext)) {
+        if (isTrackFileBaseName(baseName, expectedBaseName, trackNumber) && VALID_AUDIO_EXTENSIONS.has(ext)) {
           const filePath = path.join(destinationDir, file);
           const resolvedFilePath = path.resolve(filePath);
           if (!isPathInsideRoot(resolvedFilePath, root)) continue;

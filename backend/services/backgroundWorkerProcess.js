@@ -26,10 +26,10 @@ let ownerCommandsInFlight = 0;
 let lastOwnerCommandAt = 0;
 const DOWNLOAD_OWNER_COMMANDS = new Set([
   "start", "stop", "stopAndDrain", "wake", "researchMissingJobs",
-  "retryIncompletePlaylist", "setRetryCyclePaused", "updateWorkerSettings",
+  "setRetryCyclePaused", "updateWorkerSettings",
   "checkPlaylistComplete", "blockPlaylist", "unblockPlaylist",
-  "waitForPlaylistIdle", "waitForIdle", "clearIncompleteRetry",
-  "clearPlaylistRunState", "pruneOrphanedJobState", "scheduleReuseLinkRepair",
+  "waitForPlaylistIdle", "waitForIdle",
+  "pruneOrphanedJobState", "scheduleReuseLinkRepair",
   "runQualityUpgradeChecks", "queueQualityUpgradeForJob", "clearPendingByOwner",
   "wakeOrStart", "syncStaticPlaylistImport",
   "enqueueManualMissingSelection", "enqueueManualReplacementSelection",

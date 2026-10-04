@@ -170,6 +170,33 @@ test("reuseTrackForPlaylist detects and reuses local audio file from disk withou
   assert.equal(downloadTracker.getJob(result.jobId)?.finalPath, localFilePath);
 });
 
+test("reuseTrackForPlaylist finds a local file named with its album position", async () => {
+  const track = { artistName: "Numbered Artist", trackName: "Second Song", albumName: "Numbered Album" };
+  const albumDir = path.join(downloadRoot, "Numbered Artist", "Numbered Album");
+  await fs.mkdir(albumDir, { recursive: true });
+  await fs.writeFile(path.join(albumDir, "01 - Other Second Song.flac"), "audio");
+  const localFilePath = path.join(albumDir, "02 - Second Song.flac");
+  await fs.writeFile(localFilePath, "audio");
+
+  const result = await reuseTrackForPlaylist(track, "library", {
+    existingFileMode: "reuse",
+    downloadRoot,
+  });
+
+  assert.equal(result.reused, true);
+  assert.equal(result.finalPath, localFilePath);
+
+  const reprise = { artistName: "Numbered Artist", trackName: "Theme", albumName: "Repeated Album", trackNumber: 9 };
+  const repeatedDir = path.join(downloadRoot, "Numbered Artist", "Repeated Album");
+  await fs.mkdir(repeatedDir, { recursive: true });
+  await fs.writeFile(path.join(repeatedDir, "01 - Theme.flac"), "audio");
+  const options = { existingFileMode: "reuse", downloadRoot };
+  assert.equal((await reuseTrackForPlaylist(reprise, "library", options)).reused, false);
+  const reprisePath = path.join(repeatedDir, "09 - Theme.flac");
+  await fs.writeFile(reprisePath, "audio");
+  assert.equal((await reuseTrackForPlaylist(reprise, "library", options)).finalPath, reprisePath);
+});
+
 test("reuseTrackForPlaylist neutralizes path traversal attempts in track metadata and target playlist", async () => {
   const result = await reuseTrackForPlaylist(
     {

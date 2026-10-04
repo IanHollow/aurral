@@ -31,13 +31,15 @@ When Aurral downloads a whole album release at once, Activity shows its tracks i
 - The row stays in **Queue** while any track is active or waits for review.
 - In **History**, the row shows **Completed** only when every track is ready. A failed or missing track leaves the album incomplete.
 
-If Aurral falls back to downloading tracks one by one, those tracks stay in the same album row. The info action shows the reason for the fallback and the download sources. A request that only ever downloads track by track shows one row for each track.
+If the release leaves tracks unfilled, Aurral first tries the next ranked folder or release for them. If Aurral then falls back to downloading tracks one by one, those tracks stay in the same album row. The info action shows the reason for the fallback and the download sources. A request that only ever downloads track by track shows one row for each track.
 
 ### Review a track
 
-Aurral holds a download for review when the file looks like the requested track but its duration is wrong. It does not try another source at once.
+Aurral holds a download for review when the file looks like the requested track but its duration is wrong. A file from Soulseek or yt-dlp waits while Aurral tries the other results and download sources, and goes to review only if none of them verifies. A file from Usenet or deemix goes to review at once.
 
 Each review row shows the requested track, artist, and album, the path of the downloaded file, the match scores, and the duration. Preview the track, then approve or deny it.
+
+Approving moves the file into the Library. Denying deletes it and searches again without that file. Removing a playlist, an album, or a track that waits for review deletes its file too. Aurral never deletes a file in the Downloads Folder or a Lidarr root folder this way, for example one that deemix saved there.
 
 ## History
 

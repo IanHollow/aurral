@@ -70,7 +70,6 @@ export async function beginPlaylistMutation(ownerIds, { clearPending = true } = 
     for (const ownerId of types) {
       await downloadWorker.blockPlaylist(ownerId);
       blocked.push(ownerId);
-      await downloadWorker.clearIncompleteRetry(ownerId);
       if (clearPending) {
         if (isDownloadOwnerProcess()) downloadTracker.clearPendingByOwner(ownerId);
         else await requestDownloadOwner("clearPendingByOwner", [ownerId]);

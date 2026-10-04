@@ -1,9 +1,10 @@
 import { distance } from "fastest-levenshtein";
 import { checkVariantCompatibility } from "./semanticPolicy.js";
 import { foldDiacritics } from "../providers/brainzmashRanking.js";
+import { isVariousArtistsCredit } from "./titleText.js";
 
 export const MATCH_POLICY = Object.freeze({
-  version: "aurral-native-2",
+  version: "aurral-native-3",
   maxDurationGapMs: 10000,
   selectedDurationGapMs: 2000,
   minTitleSimilarity: 0.7,
@@ -13,7 +14,6 @@ export const MATCH_POLICY = Object.freeze({
   runnerUpMargin: 0.05,
   releaseMinCoverage: 0.8,
   releaseFitFloor: 0.8,
-  releaseRunnerUpMargin: 0.05,
 });
 
 export function getMatcherStatus() {
@@ -91,6 +91,11 @@ function asNames(value) {
   return value ? [value] : [];
 }
 
+function requestPerformers(request) {
+  return [...asNames(request.artists || request.artist), ...asNames(request.artistAliases)]
+    .filter((name) => !isVariousArtistsCredit(name));
+}
+
 function compareRecording(request, candidate, policy) {
   const contradictions = [];
   if (nonLatinTitleContradiction(request.title, candidate.title)) contradictions.push("title");
@@ -118,7 +123,7 @@ function compareRecording(request, candidate, policy) {
   if (gap != null && gap > policy.maxDurationGapMs) contradictions.push("duration");
 
   const title = similarity(coreMatchTitle(request.title), coreMatchTitle(candidate.title));
-  const requestArtists = [...asNames(request.artists || request.artist), ...asNames(request.artistAliases)];
+  const requestArtists = requestPerformers(request);
   const candidateArtists = asNames(candidate.artists || candidate.artist);
   const artist = requestArtists.length && candidateArtists.length
     ? Math.max(...requestArtists.flatMap((left) => candidateArtists.map((right) =>
@@ -146,6 +151,9 @@ export function decideRecording(request, candidates, policy = MATCH_POLICY) {
     .sort((left, right) => right.score - left.score || left.index - right.index);
   const best = eligible[0];
   const runnerUp = eligible[1];
+  // A request credited only to "Various Artists" has no performer to check.
+  const performerUnknown = requestPerformers(request).length === 0
+    && asNames(request.artists || request.artist).length > 0;
   let decision = "skip";
   let selectedIndex = null;
   if (best) {
@@ -154,6 +162,7 @@ export function decideRecording(request, candidates, policy = MATCH_POLICY) {
     const singleCandidateNeedsExactDuration = candidates.length === 1
       && !best.evidence.includes("recording-mbid") && best.durationGapMs !== 0;
     decision = strongDuration && !singleCandidateNeedsExactDuration
+      && (!performerUnknown || best.evidence.includes("recording-mbid"))
       && best.score >= policy.selectableScore
       && (!runnerUp || best.score - runnerUp.score >= policy.runnerUpMargin)
       ? "selectable" : "uncertain";
@@ -228,16 +237,21 @@ export function assignReleaseFiles(tracks, files, policy = MATCH_POLICY) {
       && Number(track.trackNumber) !== Number(file.trackNumber)) {
       comparison.contradictions.push("duplicate-title-position");
     }
-    const positionOnly = !normalizeMatchText(file.title)
-      && Number(track.trackNumber) > 0
-      && Number(track.trackNumber) === Number(file.trackNumber)
+    const samePosition = Number(track.trackNumber) > 0
+      && Number(track.trackNumber) === Number(file.trackNumber);
+    const positionOnly = samePosition
+      && !normalizeMatchText(file.title)
       && comparison.durationGapMs != null
       && comparison.durationGapMs <= policy.selectedDurationGapMs;
+    const titledPositionWithoutLength = samePosition
+      && comparison.durationGapMs == null
+      && comparison.titleSimilarity === 1;
+    const position = positionOnly || titledPositionWithoutLength;
     return {
       fileIndex,
       ...comparison,
-      score: positionOnly ? Math.max(comparison.score, policy.releaseFitFloor) : comparison.score,
-      evidence: positionOnly ? [...comparison.evidence, "position"] : comparison.evidence,
+      score: position ? Math.max(comparison.score, policy.releaseFitFloor) : comparison.score,
+      evidence: position ? [...comparison.evidence, "position"] : comparison.evidence,
     };
   }).filter((edge) => edge.contradictions.length === 0
     && (edge.evidence.includes("title") || edge.evidence.includes("position"))
@@ -279,7 +293,15 @@ export function assessRelease(release, folder, policy = MATCH_POLICY) {
   return { decision, coverage, fit, assignment, policyVersion: policy.version };
 }
 
-export function selectReleaseSession({ releases = [], folders = [], requestedRecordingMbid = null }, policy = MATCH_POLICY) {
+// Every folder that fits a release is a usable copy. Equal fits are usually
+// the same rip shared by several people, so the caller's comparison decides
+// which copy to take instead of abstaining.
+export function selectReleaseSession({
+  releases = [],
+  folders = [],
+  requestedRecordingMbid = null,
+  compare = null,
+}, policy = MATCH_POLICY) {
   const options = [];
   for (const [folderIndex, folder] of folders.entries()) {
     for (const [releaseIndex, release] of releases.entries()) {
@@ -296,25 +318,40 @@ export function selectReleaseSession({ releases = [], folders = [], requestedRec
       options.push({ folder, release, folderIndex, releaseIndex, assessment, requestedFileIndex });
     }
   }
-  options.sort((left, right) => right.assessment.fit - left.assessment.fit
+  options.sort((left, right) => (compare ? compare(left, right) : 0)
+    || right.assessment.fit - left.assessment.fit
     || right.assessment.coverage - left.assessment.coverage
     || left.folderIndex - right.folderIndex || left.releaseIndex - right.releaseIndex);
   const best = options[0] || null;
-  const runnerUp = options[1] || null;
-  const decision = !best ? "skip" : runnerUp
-    && best.assessment.fit - runnerUp.assessment.fit < policy.releaseRunnerUpMargin
-    ? "uncertain" : "selectable";
-  return { decision, selected: decision === "selectable" ? best : null, options, policyVersion: policy.version };
+  return {
+    decision: best ? "selectable" : "skip",
+    selected: best,
+    options,
+    policyVersion: policy.version,
+  };
+}
+
+export function isSameAlbumTitle(requested, observed) {
+  const left = normalizeMatchText(requested);
+  return Boolean(left) && left === normalizeMatchText(observed);
+}
+
+// A file from the requested album whose position holds a different track is
+// probably mislabeled. A file from a single, a compilation, or another
+// edition has its own numbering, so its position says nothing, and so does
+// a position on a later disc, which starts again at 1.
+export function isSiblingTrackPosition(request, actualTrackNumber, actualDiscNumber = null) {
+  const expected = Number(request.trackNumber || 0);
+  const actual = Number(actualTrackNumber || 0);
+  if (!(expected > 0 && actual > 0 && expected !== actual) || Number(actualDiscNumber) > 1) return false;
+  const siblingTitle = request.albumTrackTitles?.[actual - 1];
+  return Boolean(siblingTitle) && normalizeMatchText(siblingTitle) !== normalizeMatchText(request.title);
 }
 
 export function verifyDownloadedRecording(request, observed, policy = MATCH_POLICY) {
   const result = compareRecording(request, observed, policy);
-  const expectedTrackNumber = Number(request.trackNumber || 0);
-  const actualTrackNumber = Number(observed.trackNumber || 0);
-  const siblingTitle = expectedTrackNumber > 0 && actualTrackNumber > 0
-    && expectedTrackNumber !== actualTrackNumber
-    ? request.albumTrackTitles?.[actualTrackNumber - 1] : null;
-  if (siblingTitle && normalizeMatchText(siblingTitle) !== normalizeMatchText(request.title)) {
+  if (isSameAlbumTitle(request.albumName, observed.album)
+    && isSiblingTrackPosition(request, observed.trackNumber, observed.discNumber)) {
     result.contradictions.push("sibling-track-index");
   }
   if (observed.fileNameTitle

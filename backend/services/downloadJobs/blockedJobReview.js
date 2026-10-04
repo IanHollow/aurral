@@ -1,7 +1,7 @@
 import path from "path";
 import fs from "fs/promises";
 import { downloadTracker } from "./downloadTracker.js";
-import { downloadWorker } from "./downloadWorker.js";
+import { startWorkerIfPending } from "./downloadWorker.js";
 import { flowPlaylistConfig } from "../playlists/flowPlaylistConfig.js";
 import {
   getActiveDownloadAttemptId,
@@ -11,6 +11,7 @@ import { buildAurralTrackDestination, resolveDownloadRoot } from "../downloadPat
 import {
   commitDownloadedFile,
   joinUnderRoot,
+  buildTrackFileName,
   sanitizePathPart,
 } from "../downloadUtils.js";
 import {
@@ -19,6 +20,7 @@ import {
 } from "../pipelineHelpers.js";
 import { classifyQualityJob } from "../qualityProfileService.js";
 import { withDownloadStepLock } from "./mutationGuards.js";
+import { discardReviewFile } from "./reviewFiles.js";
 import { logger } from "../logger.js";
 
 const approvalFollowUps = new Set();
@@ -64,7 +66,7 @@ export async function approveBlockedJob(jobId) {
     ephemeral: Boolean(flowPlaylistConfig.getFlow(ownerId)),
   });
   const finalDir = joinUnderRoot(resolveDownloadRoot(), destination);
-  const finalName = `${sanitizePathPart(job.trackName, "Unknown Track")}${ext || ".mp3"}`;
+  const finalName = buildTrackFileName(job, ext || ".mp3");
   const committed = await withPipelineCommitLock(
     {
       jobId: job.id,
@@ -102,10 +104,7 @@ export async function approveBlockedJob(jobId) {
 export async function denyBlockedJob(jobId) {
   const job = getBlockedJob(jobId);
   if (!job) return { status: 404, error: "Blocked job not found" };
-  const sourcePath = String(job.stagingPath || "").trim();
-  if (sourcePath) {
-    await fs.rm(sourcePath, { force: true }).catch(() => {});
-  }
+  await discardReviewFile(job);
   const deniedSourceKey = ["usenet", "ytdlp", "deemix"].includes(job.downloadSource)
     ? String(job.releaseGuid || "").trim()
     : `${String(job.remoteUsername || "").trim()}\0${String(job.remoteFilename || "").trim()}`;
@@ -118,6 +117,6 @@ export async function denyBlockedJob(jobId) {
       recordTrackJobFailed(job, "Denied by user — will retry"),
     )
     .catch(() => {});
-  downloadWorker.wake();
+  await startWorkerIfPending();
   return { status: 200 };
 }

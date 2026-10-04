@@ -46,20 +46,6 @@ export const QUEUE_DEFINITIONS = [
     worker: "slskd-pipeline",
   },
   {
-    queue: "playlist-retry",
-    label: "Playlist Retry",
-    workerLabel: "Playlist Retry Worker",
-    description: "Retries incomplete playlist tracks after temporary download failures.",
-    worker: "playlist-retry",
-  },
-  {
-    queue: "playlist-reserve-build",
-    label: "Reserve Playlist Builds",
-    workerLabel: "Reserve Playlist Builder",
-    description: "Builds backup candidate tracks for playlists before they are needed.",
-    worker: "playlist-reserve-build",
-  },
-  {
     queue: "playlist-mbid-enrichment",
     label: "Playlist MBID Enrichment",
     workerLabel: "Playlist MBID Worker",
@@ -154,8 +140,6 @@ const PAYLOAD_LABEL_KEY = {
   "slskd-pipeline": "phase",
   "playlist-operation": (p) =>
     formatPayloadLabel(p?.label || p?.kind) || null,
-  "playlist-retry": "ownerId",
-  "playlist-reserve-build": "ownerId",
   "playlist-mbid-enrichment": "playlistId",
   "library-scan": (p) => (p?.force ? "Manual" : null),
   "discovery-user-refresh": (p) =>
@@ -166,14 +150,6 @@ const PAYLOAD_DETAIL_KEY = {
   "slskd-pipeline": (p, desc) =>
     p?.phase
       ? `${desc} Current phase: ${formatPayloadLabel(p.phase)}.`
-      : desc,
-  "playlist-retry": (p, desc) =>
-    p?.ownerId
-      ? `Retries incomplete tracks for ${formatPayloadLabel(p.ownerId)}.`
-      : desc,
-  "playlist-reserve-build": (p, desc) =>
-    p?.ownerId
-      ? `Builds reserve tracks for ${formatPayloadLabel(p.ownerId)}.`
       : desc,
   "playlist-mbid-enrichment": (p, _desc) =>
     p?.playlistId

@@ -45,12 +45,10 @@ const WORKER_STARTS = {
   "library-scan": ["./libraryScanWorker.js", "startLibraryScanWorker"],
   "_outbox:notifications": ["./notificationOutboxWorker.js", "startNotificationOutboxWorker"],
   "_outbox:play-events": ["./playEventOutboxWorker.js", "startPlayEventOutboxWorker"],
-  "slskd-pipeline": ["./slskdOrchestratorWorker.js", "startSlskdOrchestratorWorker"],
+  "slskd-pipeline": ["./downloadPipelineWorker.js", "startDownloadPipelineWorker"],
   "discovery-refresh": ["./discoveryRefreshWorker.js", "startDiscoveryRefreshWorker"],
   "discovery-user-refresh": ["./discoveryUserRefreshWorker.js", "startDiscoveryUserRefreshWorker"],
   "playlist-operation": ["./playlists/playlistOperationWorker.js", "startPlaylistOperationWorker"],
-  "playlist-retry": ["./downloadJobs/playlistRetryWorker.js", "startPlaylistRetryWorker"],
-  "playlist-reserve-build": ["./flows/flowReserveBuildWorker.js", "startFlowReserveBuildWorker"],
   "playlist-mbid-enrichment": ["./playlistMbidEnrichmentWorker.js", "startPlaylistMbidEnrichmentWorker"],
 };
 

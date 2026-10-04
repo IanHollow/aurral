@@ -20,35 +20,12 @@ test.after(async () => {
   await cleanupIsolatedState(isolatedState);
 });
 
-test("pickResolvedDurationMs prefers Last.fm only when albums agree", () => {
+test("pickResolvedDurationMs takes a Last.fm length only when no other is known", () => {
   assert.equal(
-    pickResolvedDurationMs({
-      playlistDurationMs: 282973,
-      lastfmDurationMs: 207000,
-      lastfmAlbumName: "Stages: Volume III",
-      albumName: "Stages: Volume III",
-      matchedTrackDurationMs: 282973,
-    }),
-    207000,
-  );
-  assert.equal(
-    pickResolvedDurationMs({
-      playlistDurationMs: 282973,
-      lastfmDurationMs: 207000,
-      lastfmAlbumName: "Other",
-      albumName: "Stages: Volume III",
-    }),
+    pickResolvedDurationMs({ playlistDurationMs: 282973, lastfmDurationMs: 207000 }),
     282973,
   );
-  assert.equal(
-    pickResolvedDurationMs({
-      playlistDurationMs: 282973,
-      lastfmDurationMs: 207000,
-      lastfmAlbumName: "",
-      albumName: "Stages: Volume III",
-    }),
-    282973,
-  );
+  assert.equal(pickResolvedDurationMs({ lastfmDurationMs: 207000 }), 207000);
   assert.equal(
     pickResolvedDurationMs({ lastfmDurationMs: null, matchedTrackDurationMs: 207000 }),
     207000,
@@ -176,4 +153,61 @@ test("resolveTrackSearchContext replaces a stale album MBID before resolving dur
   assert.equal(resolved.durationMs, 222813);
   assert.equal(resolved.trackNumber, 1);
   assert.deepEqual(resolved.albumTrackTitles, ["The Concept of Love"]);
+});
+
+test("resolveTrackSearchContext keeps a job's MusicBrainz release identity without lookups", async (t) => {
+  const get = t.mock.method(axios, "get", async () => ({ data: {} }));
+  const job = {
+    artistName: "Radiohead",
+    trackName: "Paranoid Android",
+    albumName: "OK Computer",
+    artistMbid: "a74b1b7f-71a5-4011-9441-d0b5e4122711",
+    albumMbid: "b1392450-e666-3926-a536-22c65f834433",
+    trackMbid: "recording-from-musicbrainz",
+    durationMs: 383000,
+    trackNumber: 2,
+    albumTrackTitles: ["Airbag", "Paranoid Android"],
+    artistAliases: ["Radio Head"],
+  };
+  const resolved = await resolveTrackSearchContext(job);
+  assert.equal(get.mock.callCount(), 0);
+  assert.equal(resolved.trackMbid, job.trackMbid);
+  assert.equal(resolved.trackNumber, 2);
+  assert.deepEqual(resolved.albumTrackTitles, job.albumTrackTitles);
+});
+
+test("resolveTrackSearchContext takes neither a recording ID nor a length from Last.fm", async (t) => {
+  const originalSettings = dbOps.getSettings();
+  dbOps.updateSettings({
+    ...originalSettings,
+    integrations: {
+      ...originalSettings.integrations,
+      lastfm: { apiKey: "lastfm-key" },
+      metadata: { ...originalSettings.integrations.metadata, baseUrl: "https://brainzmash.example.test" },
+    },
+  });
+  clearMetadataProviderCaches();
+  t.after(() => {
+    clearMetadataProviderCaches();
+    dbOps.updateSettings(originalSettings);
+  });
+  t.mock.method(axios, "get", async (url, options) => {
+    if (options?.params?.method === "track.getInfo") {
+      return { data: { track: { mbid: "stale-lastfm-recording", duration: "233000",
+        artist: { name: "Lastfm Artist" }, album: { title: "Lastfm Album" } } } };
+    }
+    if (new URL(url).pathname === "/album/lastfm-album") {
+      return { data: { id: "lastfm-album", title: "Lastfm Album", artistid: "artist-known",
+        artists: [{ id: "artist-known", artistname: "Lastfm Artist" }],
+        releases: [{ id: "lastfm-release", status: "Official", tracks: [
+          { trackname: "Lastfm Song", trackposition: 8, durationms: 369626, recordingid: "release-recording" },
+        ] }] } };
+    }
+    return { data: {} };
+  });
+  const request = { artistName: "Lastfm Artist", trackName: "Lastfm Song", artistMbid: "artist-known" };
+  assert.equal((await resolveTrackSearchContext(request)).trackMbid, null);
+  const fromRelease = await resolveTrackSearchContext({ ...request, albumName: "Lastfm Album",
+    albumMbid: "lastfm-album", durationMs: 369626 });
+  assert.equal(fromRelease.durationMs, 369626);
 });

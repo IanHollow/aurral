@@ -20,8 +20,8 @@ import {
   AURRAL_FLOWS_DIR,
   resolveDownloadRoot,
 } from "../downloadPaths.js";
-import { startSlskdOrchestratorWorker } from "../slskdOrchestratorWorker.js";
-import { withHonkerLock } from "../honkerDb.js";
+import { startDownloadPipelineWorker } from "../downloadPipelineWorker.js";
+import { listHonkerJobs, withHonkerLock } from "../honkerDb.js";
 import { isPlaylistOwnerActive } from "./playlistOwnerStatus.js";
 import {
   getDownloadOwnerStatus,
@@ -37,13 +37,20 @@ import {
 } from "./downloadCancellation.js";
 
 const DEFAULT_CONCURRENCY = 3;
+const SEARCH_SLOT_RECHECK_MS = 2000;
 const MIN_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 3;
 const JOB_COOLDOWN_MS = 750;
 const REUSE_REPAIR_INTERVAL_MS = 30 * 60 * 1000;
 const WORKER_STOPPED_CODE = "WORKER_STOPPED";
 const PLAYLIST_MUTATION_CODE = "PLAYLIST_MUTATION_IN_PROGRESS";
-const RETRY_JOB_REGISTRY_KEY = "incompleteRetryJobs";
+// The worker hands a job to the pipeline only while fewer jobs than its
+// concurrency are searching, so a large playlist does not start every
+// provider search at once.
+function countSearchingPipelineJobs() {
+  return listHonkerJobs("slskd-pipeline").filter((entry) => entry.payload?.phase === "search").length;
+}
+
 export class DownloadWorker {
   constructor(downloadRoot = resolveDownloadRoot()) {
     this.downloadRoot = resolveDownloadRoot(downloadRoot);
@@ -60,11 +67,7 @@ export class DownloadWorker {
     this.activeJobs = new Map();
     this.blockedOwnerIds = new Set();
     this.runGeneration = 0;
-    this.playlistReservePools = new Map();
-    this.playlistRunDiagnostics = new Map();
-    this.playlistFailureMemory = new Map();
     this.playlistFinalizing = new Set();
-    this.reserveBuildsInFlight = new Set();
     this.downloadMetrics = {
       completedTracks: 0,
       completedTrackAttempts: 0,
@@ -167,31 +170,6 @@ export class DownloadWorker {
     }
   }
 
-  _getRetryJobRegistry() {
-    const raw = dbOps.getJSONSetting(RETRY_JOB_REGISTRY_KEY);
-    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
-  }
-
-  _setRetryJobRegistry(registry) {
-    dbOps.setJSONSetting(RETRY_JOB_REGISTRY_KEY, registry);
-  }
-
-  getScheduledRetryJobId(ownerId) {
-    const key = String(ownerId || "").trim();
-    if (!key) return null;
-    const jobId = Number(this._getRetryJobRegistry()[key]);
-    return Number.isFinite(jobId) ? jobId : null;
-  }
-
-  clearIncompleteRetry(ownerId) {
-    const key = String(ownerId || "").trim();
-    if (!key) return;
-    const registry = this._getRetryJobRegistry();
-    if (!(key in registry)) return;
-    delete registry[key];
-    this._setRetryJobRegistry(registry);
-  }
-
   _normalizeRetryPausedPlaylistIds(value) {
     if (!Array.isArray(value)) return [];
     const out = new Set();
@@ -209,12 +187,6 @@ export class DownloadWorker {
     return this._normalizeRetryPausedPlaylistIds(raw.retryPausedPlaylistIds);
   }
 
-  _isRetryCyclePaused(ownerId) {
-    if (!ownerId) return false;
-    const paused = this._getRetryPausedPlaylistIds();
-    return paused.includes(String(ownerId));
-  }
-
   setRetryCyclePaused(ownerId, paused) {
     const id = String(ownerId || "").trim();
     if (!id) return false;
@@ -223,7 +195,6 @@ export class DownloadWorker {
     const pausedIds = new Set(this._normalizeRetryPausedPlaylistIds(worker.retryPausedPlaylistIds));
     if (paused) {
       pausedIds.add(id);
-      this.clearIncompleteRetry(id);
     } else {
       pausedIds.delete(id);
     }
@@ -247,17 +218,6 @@ export class DownloadWorker {
       const key = String(id || "").trim();
       if (!key) continue;
       out[key] = paused.has(key);
-    }
-    return out;
-  }
-
-  getIncompleteRetryMap(playlistIds = []) {
-    const scheduled = new Set(Object.keys(this._getRetryJobRegistry()));
-    const out = {};
-    for (const id of Array.isArray(playlistIds) ? playlistIds : []) {
-      const key = String(id || "").trim();
-      if (!key) continue;
-      out[key] = scheduled.has(key);
     }
     return out;
   }
@@ -316,91 +276,11 @@ export class DownloadWorker {
     return normalized;
   }
 
-  _getPlaylistFailureState(ownerId) {
-    const key = String(ownerId || "").trim();
-    if (!key) {
-      return {
-        failedUsers: new Set(),
-        queuedUsers: new Set(),
-        failedTrackKeys: new Set(),
-        terminalFailures: 0,
-      };
-    }
-    let state = this.playlistFailureMemory.get(key);
-    if (!state) {
-      state = {
-        failedUsers: new Set(),
-        queuedUsers: new Set(),
-        failedTrackKeys: new Set(),
-        terminalFailures: 0,
-      };
-      this.playlistFailureMemory.set(key, state);
-    }
-    return state;
-  }
-
-  _recordPlaylistTerminalFailure(ownerId, job) {
-    const state = this._getPlaylistFailureState(ownerId);
-    state.terminalFailures += 1;
-    const key = this._trackKeyFromJob(job);
-    if (key) {
-      state.failedTrackKeys.add(key);
-    }
-  }
-
-  clearPlaylistRunState(ownerId) {
-    const key = String(ownerId || "").trim();
-    if (!key) return;
-    this.clearIncompleteRetry(key);
-    this.playlistReservePools.delete(key);
-    this.playlistRunDiagnostics.delete(key);
-    this.playlistFailureMemory.delete(key);
-    this.playlistFinalizing.delete(key);
-    this.reserveBuildsInFlight.delete(key);
-  }
-
-  _normalizeReserveTracks(tracks = []) {
-    return (Array.isArray(tracks) ? tracks : []).filter(
-      (track) =>
-        track && String(track?.artistName || "").trim() && String(track?.trackName || "").trim(),
-    );
-  }
-
-  setPlaylistRunPlan(ownerId, plan = {}) {
-    const key = String(ownerId || "").trim();
-    if (!key) return;
-    this.playlistReservePools.set(key, this._normalizeReserveTracks(plan?.reserveTracks || []));
-    this.playlistRunDiagnostics.set(key, plan?.diagnostics || null);
-    this.playlistFinalizing.delete(key);
-    this._getPlaylistFailureState(key);
-  }
-
-  getPlaylistRunStatus(ownerId) {
-    const key = String(ownerId || "").trim();
-    const reserves = this.playlistReservePools.get(key) || [];
-    const diagnostics = this.playlistRunDiagnostics.get(key) || null;
-    const failures = this._getPlaylistFailureState(key);
-    return {
-      reserveDepth: reserves.length,
-      diagnostics,
-      failureSummary: {
-        failedUsers: failures.failedUsers.size,
-        queuedUsers: failures.queuedUsers.size,
-        failedTracks: failures.failedTrackKeys.size,
-        terminalFailures: failures.terminalFailures,
-      },
-    };
-  }
-
   _getFlowListenHistoryProfile(flow) {
     const ownerUserId = Number(flow?.ownerUserId);
     if (!Number.isFinite(ownerUserId)) return null;
     const owner = userOps.getUserById(ownerUserId);
     return owner ? getListenHistoryProfile(owner) : null;
-  }
-
-  async runQueuedReserveBuild() {
-    return { skipped: true };
   }
 
   async seedFlowRunWithTracks(ownerId, flow, tracks, _options = {}) {
@@ -413,16 +293,6 @@ export class DownloadWorker {
       null,
       new Set(flowTrackSource._buildFeedbackExcludeKeys(flow?.ownerUserId)),
     );
-    const plan = {
-      primaryTracks,
-      reserveTracks: [],
-      diagnostics: {
-        targets: { adopted: primaryTracks.length },
-        achieved: { primary: primaryTracks.length, reserve: 0 },
-      },
-    };
-    this.clearPlaylistRunState(key);
-    this.setPlaylistRunPlan(key, plan);
     flowPlaylistConfig.markLastRunAt(key);
     const jobIds = downloadTracker.addJobs(primaryTracks, key);
     return {
@@ -452,8 +322,6 @@ export class DownloadWorker {
       return { tracksQueued: 0, jobIds: [], reserveTracks: 0 };
     }
     const plan = options?.plan || await this.prepareFlowRunPlan(flow, options);
-    this.clearPlaylistRunState(key);
-    this.setPlaylistRunPlan(key, plan);
     const primaryTracks = Array.isArray(plan?.primaryTracks) ? plan.primaryTracks : [];
     flowPlaylistConfig.markLastRunAt(key);
     const jobIds = downloadTracker.addJobs(primaryTracks, key);
@@ -467,7 +335,6 @@ export class DownloadWorker {
 
   hasWork() {
     return this.activeJobs.size > 0 ||
-      this.reserveBuildsInFlight.size > 0 ||
       this.blockedOwnerIds.size > 0 ||
       Boolean(this.reuseRepairInFlight) ||
       (this.running && Boolean(downloadTracker.getNextPending()));
@@ -476,86 +343,8 @@ export class DownloadWorker {
   _maybeStopWhenIdle() {
     if (!this.running) return;
     if (this.activeJobs.size > 0) return;
-    if (this.reserveBuildsInFlight.size > 0) return;
     if (downloadTracker.getNextPending()) return;
-    this.stop();
-  }
-
-  _trackKeyFromJob(job) {
-    const artist = String(job?.artistName || "")
-      .trim()
-      .toLowerCase();
-    const track = String(job?.trackName || "")
-      .trim()
-      .toLowerCase();
-    if (!artist || !track) return "";
-    return `${artist}::${track}`;
-  }
-
-  _trackKeyFromTrack(track) {
-    const artist = String(track?.artistName || "")
-      .trim()
-      .toLowerCase();
-    const name = String(track?.trackName || "")
-      .trim()
-      .toLowerCase();
-    if (!artist || !name) return "";
-    return `${artist}::${name}`;
-  }
-
-  _artistKeyFromJob(job) {
-    return String(job?.artistName || "")
-      .trim()
-      .toLowerCase();
-  }
-
-  _artistKeyFromTrack(track) {
-    return String(track?.artistName || "")
-      .trim()
-      .toLowerCase();
-  }
-
-  markIncompleteRetryDequeued(ownerId, jobId = null) {
-    const key = String(ownerId || "").trim();
-    if (!key) return;
-    const registry = this._getRetryJobRegistry();
-    if (!(key in registry)) return;
-    if (jobId != null && Number(registry[key]) !== Number(jobId)) return;
-    delete registry[key];
-    this._setRetryJobRegistry(registry);
-  }
-
-  restoreScheduledRetryJobId(ownerId, jobId) {
-    const key = String(ownerId || "").trim();
-    if (!key || jobId == null) return;
-    const registry = this._getRetryJobRegistry();
-    if (key in registry) return;
-    registry[key] = jobId;
-    this._setRetryJobRegistry(registry);
-  }
-
-  async retryIncompletePlaylist(ownerId) {
-    if (this._isRetryCyclePaused(ownerId)) {
-      this.clearIncompleteRetry(ownerId);
-      return 0;
-    }
-    const flow = flowPlaylistConfig.getFlow(ownerId);
-    if (!flow || flow.enabled !== true) {
-      this.clearIncompleteRetry(ownerId);
-      return 0;
-    }
-
-    const stats = downloadTracker.getOwnerStats(ownerId);
-    if (stats.pending > 0 || stats.downloading > 0) {
-      if (this.running) {
-        this.wake();
-      } else {
-        await this.start();
-      }
-      return 0;
-    }
-    this.clearIncompleteRetry(ownerId);
-    return 0;
+    this._requestStop();
   }
 
   async researchMissingJobs(jobIds) {
@@ -634,13 +423,17 @@ export class DownloadWorker {
 
     this.runGeneration += 1;
     this.running = true;
-    startSlskdOrchestratorWorker();
+    startDownloadPipelineWorker();
     console.log("[DownloadWorker] Starting worker...");
 
     this.processLoop = () => {
       if (!this.running) return;
       const { concurrency } = this.getWorkerSettings();
       while (this.activeCount < concurrency) {
+        if (this.activeCount + countSearchingPipelineJobs() >= concurrency) {
+          this._scheduleProcessIn(SEARCH_SLOT_RECHECK_MS);
+          break;
+        }
         const job = this._getNextReadyPendingJob(this.lastDequeuedOwnerId);
         if (!job) {
           break;
@@ -674,7 +467,6 @@ export class DownloadWorker {
               return;
             }
             console.error(`[DownloadWorker] Error processing job ${job.id}:`, error.message);
-            this._recordPlaylistTerminalFailure(job.ownerId, job);
             downloadTracker.setFailed(job.id, error.message);
             import("../aurralHistoryService.js")
               .then(({ recordTrackJobFailed }) => recordTrackJobFailed(job, error.message))
@@ -717,11 +509,7 @@ export class DownloadWorker {
     this.processLoop = null;
     this.lastDequeuedOwnerId = null;
     this.currentJob = null;
-    this.playlistReservePools.clear();
-    this.playlistRunDiagnostics.clear();
-    this.playlistFailureMemory.clear();
     this.playlistFinalizing.clear();
-    this.reserveBuildsInFlight.clear();
     console.log("[DownloadWorker] Worker stopped");
     return true;
   }
@@ -850,10 +638,6 @@ export class DownloadWorker {
     const allSettled = total > 0 && pending === 0 && downloading === 0;
     const hasDone = done > 0;
 
-    if (allSettled) {
-      this.clearIncompleteRetry(ownerId);
-    }
-
     if (allSettled && hasDone) {
       if (this.playlistFinalizing.has(playlistKey)) {
         return;
@@ -938,39 +722,15 @@ export class DownloadWorker {
       if (activePlaylistIds.has(playlistId)) continue;
       this.blockedOwnerIds.delete(playlistId);
     }
-    for (const map of [
-      this.playlistReservePools,
-      this.playlistRunDiagnostics,
-      this.playlistFailureMemory,
-    ]) {
-      for (const playlistId of [...map.keys()]) {
-        if (activePlaylistIds.has(playlistId)) continue;
-        map.delete(playlistId);
-      }
-    }
-    for (const playlistId of Object.keys(this._getRetryJobRegistry())) {
+    for (const playlistId of [...this.playlistFinalizing]) {
       if (activePlaylistIds.has(playlistId)) continue;
-      this.clearIncompleteRetry(playlistId);
-    }
-    for (const set of [this.playlistFinalizing, this.reserveBuildsInFlight]) {
-      for (const playlistId of [...set]) {
-        if (activePlaylistIds.has(playlistId)) continue;
-        set.delete(playlistId);
-      }
+      this.playlistFinalizing.delete(playlistId);
     }
   }
 
   getStatus() {
     const settings = this.getWorkerSettings();
     const completedTracks = Number(this.downloadMetrics.completedTracks || 0);
-    const playlistRuns = {};
-    for (const ownerId of new Set([
-      ...this.playlistReservePools.keys(),
-      ...this.playlistRunDiagnostics.keys(),
-      ...this.playlistFailureMemory.keys(),
-    ])) {
-      playlistRuns[ownerId] = this.getPlaylistRunStatus(ownerId);
-    }
     return {
       running: this.running,
       processing: this.activeCount > 0,
@@ -989,7 +749,6 @@ export class DownloadWorker {
             ? Math.round(this.downloadMetrics.completedTrackLatencyMs / completedTracks)
             : 0,
       },
-      playlistRuns,
       settings,
     };
   }
@@ -1019,14 +778,11 @@ function createRemoteDownloadWorker() {
     },
     getWorkerSettings: (...args) => reader.getWorkerSettings(...args),
     getRetryCyclePausedMap: (...args) => reader.getRetryCyclePausedMap(...args),
-    getIncompleteRetryMap: (...args) => reader.getIncompleteRetryMap(...args),
-    getScheduledRetryJobId: (...args) => reader.getScheduledRetryJobId(...args),
     start: () => call("start"),
     stop: () => notify("stop"),
     stopAndDrain: () => call("stopAndDrain", [], 30 * 60 * 1000),
     wake: (delayMs = 0) => notify("wakeOrStart", [delayMs]),
     researchMissingJobs: (jobIds) => call("researchMissingJobs", [jobIds], 10 * 60 * 1000),
-    retryIncompletePlaylist: (id) => call("retryIncompletePlaylist", [id], 10 * 60 * 1000),
     setRetryCyclePaused: async (id, paused) => {
       const result = await call("setRetryCyclePaused", [id, paused]);
       dbOps.invalidateSettingsCache();
@@ -1042,8 +798,6 @@ function createRemoteDownloadWorker() {
     unblockPlaylist: (id) => call("unblockPlaylist", [id]),
     waitForPlaylistIdle: (id) => call("waitForPlaylistIdle", [id], 30 * 60 * 1000),
     waitForIdle: () => call("waitForIdle", [], 30 * 60 * 1000),
-    clearIncompleteRetry: (id) => call("clearIncompleteRetry", [id]),
-    clearPlaylistRunState: (id) => call("clearPlaylistRunState", [id]),
     pruneOrphanedJobState: () => call("pruneOrphanedJobState"),
     scheduleReuseLinkRepair: (force) => notify("scheduleReuseLinkRepair", [force]),
   };
