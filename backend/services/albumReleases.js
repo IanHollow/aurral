@@ -39,11 +39,41 @@ export async function loadAlbumReleases(albumMbid) {
           durationMs: track.durationMs,
           trackNumber: track.trackPosition ?? track.trackNumber,
           recordingMbid: track.recordingId,
+          recordingMbidAliases: track.oldRecordingIds || [],
         })),
       }));
   } catch {
     return [];
   }
+}
+
+// MusicBrainz merges duplicate recordings and keeps their old IDs, which
+// files tagged before the merge still carry.
+function recordingAliasMap(releases) {
+  const aliases = new Map();
+  for (const release of releases) {
+    for (const track of release.tracks || []) {
+      const id = String(track.recordingMbid || "").toLowerCase();
+      if (!id || !track.recordingMbidAliases?.length) continue;
+      aliases.set(id, [...new Set([...(aliases.get(id) || []), ...track.recordingMbidAliases])]);
+    }
+  }
+  return aliases;
+}
+
+// The other IDs of a recording, whether the given ID is its current one or
+// one merged into it.
+function sameRecordingIds(aliases, id) {
+  for (const [current, merged] of aliases) {
+    if (current === id || merged.includes(id)) return [current, ...merged].filter((entry) => entry !== id);
+  }
+  return [];
+}
+
+export async function withRecordingAliases(request, albumMbid) {
+  const id = String(request?.trackMbid || request?.recordingMbid || "").trim().toLowerCase();
+  const aliases = id ? sameRecordingIds(recordingAliasMap(await loadAlbumReleases(albumMbid)), id) : [];
+  return aliases.length ? { ...request, recordingMbidAliases: aliases } : request;
 }
 
 // Lines a release up with the requested jobs: each job takes the release
@@ -76,11 +106,14 @@ export function releaseTracksForJobs(release, jobs) {
 // so a download that fills it is that whole edition.
 export function candidateReleasesForJobs(jobs, releases = []) {
   const seen = new Set();
+  const aliases = recordingAliasMap(releases);
+  const withAliases = (track) => ({ ...track,
+    recordingMbidAliases: sameRecordingIds(aliases, String(track.recordingMbid || "").toLowerCase()) });
   return [
-    { id: null, tracks: jobs.map((job) => ({ ...jobReleaseTrack(job), onRelease: true })), titles: null,
+    { id: null, tracks: jobs.map((job) => withAliases({ ...jobReleaseTrack(job), onRelease: true })), titles: null,
       requestedAll: true },
     ...releases.map((release) => {
-      const tracks = releaseTracksForJobs(release, jobs);
+      const tracks = releaseTracksForJobs(release, jobs).map(withAliases);
       return {
         id: release.id,
         tracks,
