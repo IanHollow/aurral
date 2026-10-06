@@ -92,6 +92,7 @@ export function buildResolvedJobTrack(job, payloadTrack = {}) {
     albumName: job.albumName || track.albumName,
     artistMbid: job.artistMbid || track.artistMbid,
     albumMbid: job.albumMbid || track.albumMbid,
+    releaseMbid: job.releaseMbid || track.releaseMbid,
     trackMbid: job.trackMbid || track.trackMbid,
     releaseYear: job.releaseYear || track.releaseYear,
     durationMs: job.durationMs ?? track.durationMs ?? null,

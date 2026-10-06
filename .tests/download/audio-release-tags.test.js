@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { parseFile } from "music-metadata";
 
-import { writeAudioMetadata } from "../../backend/services/downloadUtils.js";
+import { buildResolvedJobTrack, writeAudioMetadata } from "../../backend/services/downloadUtils.js";
 
 const releaseGroup = "11111111-1111-4111-8111-111111111111";
 const release = "22222222-2222-4222-8222-222222222222";
@@ -28,7 +28,11 @@ test("writing group metadata preserves the source release ID", async (t) => {
   assert.equal(common.musicbrainz_releasegroupid, releaseGroup);
 
   const replacementRelease = "33333333-3333-4333-8333-333333333333";
-  await writeAudioMetadata(file, { albumMbid: releaseGroup, releaseMbid: replacementRelease });
+  const resolvedTrack = buildResolvedJobTrack(
+    { albumMbid: releaseGroup },
+    { releaseMbid: replacementRelease },
+  );
+  await writeAudioMetadata(file, resolvedTrack);
   const replaced = await parseFile(file);
   assert.equal(replaced.common.musicbrainz_albumid, replacementRelease);
   assert.equal(replaced.common.musicbrainz_releasegroupid, releaseGroup);
