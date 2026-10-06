@@ -25,6 +25,12 @@ import { logger } from "../logger.js";
 
 const approvalFollowUps = new Set();
 
+async function removeReviewedDownload(job) {
+  if (job.downloadSource !== "usenet") return;
+  const { removeReviewedUsenetDownload } = await import("../usenetOrchestrator.js");
+  await removeReviewedUsenetDownload(job);
+}
+
 export const hasApprovalFollowUps = () => approvalFollowUps.size > 0;
 
 const getBlockedJob = (jobId) => {
@@ -92,6 +98,7 @@ export async function approveBlockedJob(jobId) {
   if (committed.cancelled) return { status: 409, error: "Download job was removed" };
   if (!committed.result) return { status: 404, error: "Blocked job not found" };
   const { committedPath, recorded } = committed.result;
+  await removeReviewedDownload(job);
   try {
     await classifyQualityJob(downloadTracker.getJob(job.id));
   } catch (error) {

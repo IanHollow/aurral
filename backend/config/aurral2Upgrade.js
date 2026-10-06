@@ -375,6 +375,11 @@ export function upgradeFromAurral2(db) {
     ALTER TABLE users DROP COLUMN allow_identity_adoption;
   `);
   db.exec(`
+    DELETE FROM discovery_cache
+    WHERE key = 'topTags' OR key LIKE '%fallbackGenres' OR key LIKE '%fallbackGenrePools';
+    UPDATE discovery_cache SET value = 'listenbrainz' WHERE key = 'provider' AND value = 'listenbrainz-fallback';
+  `);
+  db.exec(`
     DELETE FROM images_cache
     WHERE image_url LIKE 'http://archive.org/%'
        OR image_url LIKE 'https://archive.org/%'

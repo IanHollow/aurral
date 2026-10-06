@@ -13,13 +13,14 @@ import {
   removeLibraryFileIfUnshared,
   reuseTrackForPlaylist,
 } from "../downloadJobs/fileReuse.js";
-import { withPlaylistMutation } from "../downloadJobs/mutationGuards.js";
+import { withPlaylistMutation, withPlaylistMutationLock } from "../downloadJobs/mutationGuards.js";
 import {
   flowPlaylistConfig,
   invalidateFlowPlaylistConfigCache,
   orderJobsByPlaylistTracks,
   tracksShareMembership,
 } from "./flowPlaylistConfig.js";
+import { playlistManager } from "./playlistManager.js";
 
 export const LIBRARY_OWNER = "library";
 const ACTIVE_STATUSES = ["pending", "downloading", "blocked"];
@@ -273,4 +274,36 @@ export async function cleanupRemovedLibraryFiles() {
     }
     db.prepare("DELETE FROM settings WHERE key = ?").run(row.key);
   }
+}
+
+function playlistsWithMissingDownloads() {
+  dbOps.invalidateSettingsCache();
+  invalidateFlowPlaylistConfigCache();
+  const jobIds = new Set(downloadTracker.getAll().map((job) => job.id));
+  return flowPlaylistConfig.getStaticPlaylists()
+    .map((playlist) => ({
+      playlist,
+      tracks: playlist.tracks.filter((track) => !track.jobId || jobIds.has(track.jobId)),
+    }))
+    .filter(({ playlist, tracks }) => tracks.length < playlist.tracks.length);
+}
+
+export async function removePlaylistTracksWithoutDownloads() {
+  const playlistIds = playlistsWithMissingDownloads().map(({ playlist }) => playlist.id);
+  if (!playlistIds.length) return [];
+  const repairedIds = await withPlaylistMutationLock(playlistIds, () =>
+    playlistsWithMissingDownloads()
+      .filter(({ playlist, tracks }) => playlistIds.includes(playlist.id) &&
+        flowPlaylistConfig.updateStaticPlaylist(playlist.id, { tracks }))
+      .map(({ playlist }) => playlist.id));
+  playlistManager.updateConfig(false);
+  for (const playlistId of repairedIds) {
+    await playlistManager.refreshPlaylist(playlistId).catch((error) => {
+      logger.warn("playlists", "Could not republish a playlist after removing missing tracks", {
+        playlistId,
+        message: error?.message || String(error),
+      });
+    });
+  }
+  return repairedIds;
 }

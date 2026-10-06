@@ -194,6 +194,33 @@ test("queued work, permissions, and notification settings move to their current 
   }
 });
 
+test("discovery drops the shared ListenBrainz genre sections and keeps its other data", () => {
+  const loaded = fixture("stamped");
+  const before = new Database(loaded.dbPath);
+  const insert = before.prepare(
+    "INSERT OR REPLACE INTO discovery_cache (key, value, last_updated) VALUES (?, ?, ?)",
+  );
+  insert.run("fallbackGenres", JSON.stringify([{ name: "Rock", artists: [{ name: "Queen" }] }]), "2026-01-01");
+  insert.run("fallbackGenrePools", JSON.stringify({ Rock: [{ name: "Queen" }] }), "2026-01-01");
+  insert.run("topTags", JSON.stringify(["Rock", "Pop"]), "2026-01-01");
+  insert.run("provider", "listenbrainz-fallback", "2026-01-01");
+  insert.run("globalTop", JSON.stringify([{ name: "Trending" }]), "2026-01-01");
+  insert.run("user:1:topGenres", JSON.stringify(["shoegaze"]), "2026-01-01");
+  before.close();
+  const db = openAurralDatabase({ dbPath: loaded.dbPath, dataDir: loaded.dataDir, env: { DOWNLOAD_FOLDER: loaded.downloadRoot } });
+  try {
+    const rows = Object.fromEntries(
+      db.prepare("SELECT key, value FROM discovery_cache").all().map((row) => [row.key, row.value]),
+    );
+    for (const key of ["fallbackGenres", "fallbackGenrePools", "topTags"]) assert.equal(Object.hasOwn(rows, key), false, key);
+    assert.equal(rows.provider, "listenbrainz");
+    assert.ok(rows.globalTop);
+    assert.ok(rows["user:1:topGenres"]);
+  } finally {
+    db.close();
+  }
+});
+
 test("covers cached from the old cover host are cleared", () => {
   const { db } = upgrade("stamped");
   try {

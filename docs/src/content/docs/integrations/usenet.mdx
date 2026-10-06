@@ -56,6 +56,7 @@ The **NZBGet** card in **Settings > Download clients** has these fields:
 - **Category**: the NZBGet category for Aurral jobs. The default is `aurral`.
 - **Source priority**: the order among download sources. The default is `20`.
 - **NZB priority**: the queue priority that Aurral sends to NZBGet.
+- **Delete leftover files**: deletes a download's folder once Aurral is done with it. Enabled by default.
 - **Completed download path**: the folder of finished downloads. Set it only when Aurral cannot find that folder by itself.
 - **Add NZBs paused**: sends jobs to NZBGet paused.
 
@@ -77,9 +78,9 @@ For an Aurral album, one NZB can fill several tracks. If the NZB leaves tracks u
 
 A release that fails to download, or that holds no file for the track, is not offered again for that track.
 
-After Aurral imports a download, or the download fails, it removes the item from the client's queue and history. SABnzbd also deletes the files that Aurral did not import. NZBGet keeps completed files on disk, so clear its completed-download folder for Aurral's category yourself.
+After Aurral imports a download, or the download fails, it removes the item from the client's queue and history and deletes the files that Aurral did not import. For NZBGet, turn off **Delete leftover files** to keep those files. Aurral deletes only the folder NZBGet created for the download. If a post-processing script moved the files elsewhere, Aurral leaves them and the history item in place. When two NZBGet downloads have the same name, NZBGet puts both in one folder, and Aurral removes that folder only with the last of them.
 
-If a file matches the requested track but its duration is very different, Aurral holds it in **Activity > Queue**. You can preview, approve, or deny it.
+If a file matches the requested track but its duration is very different, Aurral holds it in **Activity > Queue**. You can preview, approve, or deny it. Aurral keeps the rest of that download until you approve, deny, or remove the song.
 
 ## Quality and upgrades
 

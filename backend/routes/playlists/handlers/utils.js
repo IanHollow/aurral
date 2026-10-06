@@ -14,10 +14,7 @@ import {
   getStaticPlaylistJobIds,
   staticPlaylistReferencesJob,
 } from "../../../services/playlists/staticPlaylistJobs.js";
-import {
-  getUnavailableFlowSourceError,
-  normalizeFlowMixForValidation,
-} from "../../../services/flows/flowValidation.js";
+import { normalizeFlowMixForValidation } from "../../../services/flows/flowValidation.js";
 import { logger } from "../../../services/logger.js";
 
 export const EXISTING_FILE_MODE_OPTIONS = ["download", "reuse"];
@@ -91,8 +88,6 @@ export const validateFlowPayload = ({
   if (totalWeight <= 0) {
     return "at least one source must be enabled";
   }
-  const unavailableError = getUnavailableFlowSourceError(normalizedMix);
-  if (unavailableError) return unavailableError;
   const normalizedTags = normalizeFlowStringArray(tags);
   const normalizedRelated = normalizeFlowStringArray(relatedArtists);
   if (normalizedMix.focus > 0 && normalizedTags.length === 0 && normalizedRelated.length === 0) {

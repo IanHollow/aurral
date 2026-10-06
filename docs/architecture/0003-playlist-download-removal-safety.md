@@ -32,6 +32,7 @@ Treat playlist removal as a durable cancellation boundary.
 - Library-track removal waits for provider cleanup before deleting matching jobs or files. If cleanup fails, the library track and job stay in place for a later retry.
 - Library-track deletion reads each matching job's current `finalPath` after provider cancellation finishes. It includes that path in file cleanup before removing the track, so a finalizer that already held the lock cannot leave an untracked file behind.
 - Library-track deletion checks playlist file references before unlinking a path. It moves a shared managed file to a surviving playlist. It leaves other referenced files in place when it cannot move them safely.
+- Library-track and album deletion remove the static playlist tracks that referenced the deleted library jobs, under each playlist's download locks. Quick and full library refreshes remove any remaining static playlist track whose referenced job no longer exists, so a failed or older deletion cannot leave a hidden track that still blocks adding the same song.
 - slskd, deemix, and Usenet submissions use the import lock. Each handler records the provider ID before releasing the lock, and cancellation reads the current job metadata after it acquires the lock. A failed provider cleanup therefore leaves the ID available for retry.
 - A failed static playlist edit or deletion leaves the playlist unchanged and restores the job cancellations it made. Downloads it interrupted become failed jobs that the user can retry.
 

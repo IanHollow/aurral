@@ -6,7 +6,6 @@ import { getPlaylistOperationWorkerStatus } from "./playlistOperationWorker.js";
 import { getDownloadClient } from "../download/downloadClientSettings.js";
 import { dbOps, userOps } from "../../db/helpers/index.js";
 import { db } from "../../config/db-sqlite.js";
-import { getFlowCapabilities } from "../listenbrainzDiscoveryFallback.js";
 import { getStaticPlaylistJobs } from "./staticPlaylistJobs.js";
 
 const playlistSettingsStmt = db.prepare("SELECT key, value FROM settings WHERE key IN ('flows', 'staticPlaylists') ORDER BY key");
@@ -278,7 +277,6 @@ export function getPlaylistStatusSnapshot({
     staticPlaylistStats: staticPlaylistStats,
     flows: flowsWithOwners,
     staticPlaylists: staticPlaylistsWithOwners,
-    capabilities: getFlowCapabilities(),
     retryCyclePausedByPlaylist,
     operationQueue,
     operationWorker,
