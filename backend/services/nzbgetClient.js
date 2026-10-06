@@ -5,6 +5,7 @@ import {
   sanitizeNzbName,
 } from "./usenetClientCommon.js";
 import axios from "../../lib/axiosFetch.js";
+import { removeNzbgetDownloadFolder } from "./nzbgetCleanup.js";
 
 export const nzbgetSettings = Object.freeze({
   key: "nzbget",
@@ -36,6 +37,12 @@ export const nzbgetSettings = Object.freeze({
       section: "Connection",
     }),
     Object.freeze({ key: "category", label: "Category", type: "text", section: "Downloads" }),
+    Object.freeze({
+      key: "deleteLeftovers",
+      label: "Delete leftover files",
+      type: "toggle",
+      section: "Downloads",
+    }),
     Object.freeze({
       key: "priority",
       label: "Source priority",
@@ -75,6 +82,7 @@ export const nzbgetSettings = Object.freeze({
     username: "",
     password: "",
     category: "aurral",
+    deleteLeftovers: true,
     priority: 20,
     nzbPriority: 0,
     addPaused: false,
@@ -85,6 +93,7 @@ export const nzbgetSettings = Object.freeze({
 });
 
 let connectionCache = { checkedAt: 0, result: null, settingsKey: null };
+let folderCleanup = Promise.resolve();
 
 function getSettings(config = null) {
   const nzbget = config || dbOps.getSettings()?.integrations?.nzbget || {};
@@ -94,6 +103,7 @@ function getSettings(config = null) {
     username: String(nzbget.username || "").trim(),
     password: String(nzbget.password || ""),
     category: String(nzbget.category || "aurral").trim(),
+    deleteLeftovers: nzbget.deleteLeftovers !== false,
     priority: normalizeInteger(nzbget.priority, 20),
     nzbPriority: normalizeInteger(nzbget.nzbPriority, 0),
     addPaused: nzbget.addPaused === true,
@@ -273,8 +283,32 @@ export class NzbgetClient {
     return this.editItem("GroupFinalDelete", nzbId);
   }
 
-  async deleteHistoryItem(nzbId) {
-    return this.editItem("HistoryFinalDelete", nzbId);
+  // NZBGet keeps a finished download's files, so Aurral deletes its folder
+  // first. If that fails, the history entry stays for a manual cleanup.
+  // Cleanups run one at a time so two downloads that share a folder cannot
+  // each leave it to the other.
+  async deleteHistoryItem(nzbId, { deleteFiles = false, historyItem = null } = {}) {
+    const settings = this._getSettings();
+    if (!deleteFiles || !settings.deleteLeftovers) return this.editItem("HistoryFinalDelete", nzbId);
+    const cleanup = folderCleanup.then(async () => {
+      const item = historyItem || (await this.getHistoryItem(nzbId));
+      if (item && !(await this.sharesDownloadFolder(item))) {
+        await removeNzbgetDownloadFolder(item, await this.getDownloadDirectories(), settings.category);
+      }
+      return this.editItem("HistoryFinalDelete", nzbId);
+    });
+    folderCleanup = cleanup.catch(() => {});
+    return cleanup;
+  }
+
+  // NZBGet moves a download into the folder named after it even when another
+  // download of the same name already uses that folder. The last one removes it.
+  async sharesDownloadFolder(item) {
+    const id = normalizeInteger(item.NZBID ?? item.ID, null);
+    const isOther = (entry) => normalizeInteger(entry?.NZBID ?? entry?.ID, null) !== id;
+    const [queue, history] = await Promise.all([this.listGroups(), this.history(false)]);
+    return queue.some((entry) => isOther(entry) && entry.NZBName === item.NZBName)
+      || history.some((entry) => isOther(entry) && entry.DestDir === item.DestDir);
   }
 
   async editItem(command, nzbId) {
@@ -286,8 +320,14 @@ export class NzbgetClient {
   async getDownloadDirectories() {
     const settings = this._getSettings();
     const config = await this.config().catch(() => []);
+    const categoryEntry = config.find((entry) =>
+      /^Category\d+\.Name$/i.test(entry.Name || "")
+      && String(entry.Value || "").toLowerCase() === settings.category.toLowerCase());
     return {
       completedPath: settings.completedPath || "",
+      categoryDestDir: categoryEntry
+        ? readConfigValue(config, categoryEntry.Name.replace(/\.Name$/i, ".DestDir"))
+        : "",
       destDir: readConfigValue(config, "DestDir"),
       interDir: readConfigValue(config, "InterDir"),
       mainDir: readConfigValue(config, "MainDir"),

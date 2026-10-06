@@ -64,20 +64,30 @@ function getUsenetClientKey(preferredKey = null) {
 }
 
 // Both clients drop the queue and history entry. SABnzbd also deletes the
-// job's remaining files; NZBGet keeps completed files on disk.
-function removeUsenetItem(payload, jobId) {
+// job's files; NZBGet does with deleteFiles, unless its setting is off.
+async function removeUsenetItem(payload, jobId, options = {}) {
   const client = getUsenetClient(payload.downloadClient || payload.manualDownloadClient);
   for (const [entry, remove] of [
     ["queue", () => client.deleteQueueItem(payload.nzbId)],
-    ["history", () => client.deleteHistoryItem(payload.nzbId)],
+    ["history", () => client.deleteHistoryItem(payload.nzbId, options)],
   ]) {
-    remove().catch((error) => {
+    await remove().catch((error) => {
       logger.warn("usenet", `Could not remove the ${client.key} ${entry} item`, {
         jobId,
         reason: error?.message || String(error),
       });
     });
   }
+}
+
+// A song held for review keeps its release until it is approved, denied, or removed.
+export async function removeReviewedUsenetDownload(job) {
+  if (job?.downloadSource !== "usenet" || !job.downloadClientId) return;
+  await removeUsenetItem(
+    { downloadClient: job.downloadClient, nzbId: job.downloadClientId },
+    job.id,
+    { deleteFiles: true },
+  );
 }
 
 const RELEASE_RESET = Object.freeze({ nzbId: null, history: null, missingPolls: 0 });
@@ -416,7 +426,7 @@ async function handleUsenetPoll(payload, helpers) {
       };
     }
     if (state === "failed") {
-      removeUsenetItem(payload, job.id);
+      await removeUsenetItem(payload, job.id, { deleteFiles: true, historyItem });
       blockRelease(payload, job);
       if (hasNextCandidate(payload)) return buildNextCandidatePayload(payload, RELEASE_RESET);
       return helpers.failOrTryNextSource(
@@ -459,7 +469,7 @@ async function handleUsenetFinalize(payload, helpers) {
       filePaths, source: "usenet", album: candidate?.resolvedAlbumName || job.albumName,
       resetFields: RELEASE_RESET,
     });
-    removeUsenetItem(payload, job.id);
+    await removeUsenetItem(payload, job.id, { deleteFiles: true, historyItem });
     return next;
   }
   const resolvedTrack = {
@@ -477,7 +487,7 @@ async function handleUsenetFinalize(payload, helpers) {
     { manualSelection: payload.manualSelection === true },
   );
   if (!isPipelinePayloadActive(payload)) {
-    removeUsenetItem(payload, job.id);
+    await removeUsenetItem(payload, job.id, { deleteFiles: true, historyItem });
     return null;
   }
   if (
@@ -493,7 +503,7 @@ async function handleUsenetFinalize(payload, helpers) {
   if (!found.filePath) {
     const reason = found.validation?.reason
       || "Usenet download completed, but no matching audio file was found";
-    removeUsenetItem(payload, job.id);
+    await removeUsenetItem(payload, job.id, { deleteFiles: true, historyItem });
     if (audioFiles.length > 0) blockRelease(payload, job);
     if (hasNextCandidate(payload)) return buildNextCandidatePayload(payload, RELEASE_RESET);
     return helpers.failOrTryNextSource(payload, job, reason);
@@ -519,7 +529,6 @@ async function handleUsenetFinalize(payload, helpers) {
       source: "usenet",
       jobId: job.id,
     });
-    removeUsenetItem(payload, job.id);
     return finalizePipelineJobSuccess({
       downloadTracker,
       job,
@@ -531,6 +540,7 @@ async function handleUsenetFinalize(payload, helpers) {
   if (committed.cancelled) {
     return null;
   }
+  await removeUsenetItem(payload, job.id, { deleteFiles: true, historyItem });
   return committed.result;
 }
 
