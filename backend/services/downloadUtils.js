@@ -261,7 +261,7 @@ export async function writeAudioMetadata(filePath, metadata = {}) {
     ["album", metadata.albumName],
     ["musicbrainz_artistid", performer ? null : metadata.artistMbid],
     ["musicbrainz_albumartistid", metadata.artistMbid],
-    ["musicbrainz_albumid", metadata.albumMbid],
+    ["musicbrainz_albumid", metadata.releaseMbid],
     ["musicbrainz_releasegroupid", metadata.albumMbid],
     ["musicbrainz_recordingid", metadata.trackMbid],
     ["musicbrainz_trackid", metadata.trackMbid],
