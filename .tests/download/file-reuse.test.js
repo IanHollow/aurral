@@ -667,3 +667,74 @@ test("Aurral copies stay when the album was not handed over or playback still us
   assert.equal(path.resolve(downloadTracker.getJob(inUse.jobId).finalPath), path.resolve(inUse.lidarrPath));
   assert.equal(await fileExists(inUse.aurralPath), true);
 });
+
+test("turning Lidarr off requeues downloads that used a Lidarr file", async (t) => {
+  const { downloadWorker } = await importFromRepo("backend/services/downloadJobs/downloadWorker.js");
+  const { lidarrClient } = await importFromRepo("backend/services/lidarrClient.js");
+  const musicRoot = path.join(isolatedState.baseDir, "music");
+  dbOps.updateSettings({
+    integrations: { lidarr: { enabled: false, apiKey: "key", rootFolderPath: musicRoot } },
+  });
+  lidarrClient.updateConfig();
+  t.mock.method(downloadWorker, "start", async () => {});
+  t.mock.method(downloadWorker, "wake", () => {});
+  const doneJob = (trackName, finalPath, externalPath = null) => {
+    const id = downloadTracker.addJob({ artistName: "Artist", trackName }, "library");
+    downloadTracker.setDone(id, finalPath, "Album", externalPath);
+    return id;
+  };
+  const reused = doneJob("Reused", path.join(musicRoot, "Artist", "1.flac"), "/remote/music/Artist/1.flac");
+  const repointed = doneJob("Repointed", path.join(musicRoot, "Artist", "2.flac"));
+  const own = doneJob("Own", path.join(downloadRoot, "Artist", "3.flac"));
+  const elsewhere = doneJob("Elsewhere", path.join(isolatedState.baseDir, "old-downloads", "4.flac"));
+
+  assert.equal(await downloadWorker.releaseLidarrFiles(), 2);
+
+  assert.equal(downloadTracker.getJob(reused).status, "pending");
+  assert.equal(downloadTracker.getJob(repointed).status, "pending");
+  assert.equal(downloadTracker.getJob(own).status, "done");
+  assert.equal(downloadTracker.getJob(elsewhere).status, "done");
+
+  dbOps.updateSettings({
+    integrations: { lidarr: { enabled: true, apiKey: "key", rootFolderPath: musicRoot } },
+  });
+  lidarrClient.updateConfig();
+  const kept = doneJob("Kept", path.join(musicRoot, "Artist", "5.flac"), "/remote/music/Artist/5.flac");
+  assert.equal(await downloadWorker.releaseLidarrFiles(), 0);
+  assert.equal(downloadTracker.getJob(kept).status, "done");
+});
+
+test("playlists reuse a Lidarr file only while Lidarr is on", async (t) => {
+  const { lidarrClient } = await importFromRepo("backend/services/lidarrClient.js");
+  const setLidarr = (enabled) => {
+    dbOps.updateSettings({ integrations: { lidarr: { enabled, apiKey: "key" } } });
+    lidarrClient.updateConfig();
+  };
+  t.after(() => setLidarr(false));
+  const lidarrPath = path.join(isolatedState.baseDir, "music", "Reuse Artist", "Reuse Album", "01 Song.flac");
+  await fs.mkdir(path.dirname(lidarrPath), { recursive: true });
+  await fs.writeFile(lidarrPath, "lidarr");
+  const artist = libraryStore.upsertLibraryArtist({ identityKey: "name:reuse-artist", name: "Reuse Artist" });
+  const album = libraryStore.upsertLibraryAlbum({
+    identityKey: "name:reuse-artist:reuse-album",
+    artistId: artist.id,
+    title: "Reuse Album",
+  });
+  const libraryTrack = libraryStore.upsertLibraryTrack({
+    identityKey: "name:reuse-artist:reuse-album:song",
+    title: "Song",
+    artistName: "Reuse Artist",
+  });
+  libraryStore.linkLibraryAlbumTrack({ albumId: album.id, trackId: libraryTrack.id, trackNumber: 1 });
+  libraryStore.upsertLibraryMediaFile({ trackId: libraryTrack.id, albumId: album.id, source: "lidarr", path: lidarrPath });
+  const track = { artistName: "Reuse Artist", trackName: "Song", albumName: "Reuse Album" };
+
+  setLidarr(false);
+  const off = await reuseTrackForPlaylist(track, "off-playlist", { existingFileMode: "reuse", downloadRoot });
+  setLidarr(true);
+  const on = await reuseTrackForPlaylist(track, "on-playlist", { existingFileMode: "reuse", downloadRoot });
+
+  assert.equal(off.reused, false);
+  assert.equal(on.reused, true);
+  assert.equal(on.sourceType, "lidarr");
+});
