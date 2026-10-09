@@ -1,5 +1,6 @@
 import { UUID_REGEX } from "../../../../lib/uuid.js";
 import { dbOps } from "../../../db/helpers/index.js";
+import { noCache } from "../../../middleware/cache.js";
 import { buildImageProxyUrl } from "../../../services/imageProxyService.js";
 import { fetchReleaseGroupCoverUrl } from "../../../services/releaseGroupCoverService.js";
 import { libraryManager } from "../../../services/libraryManager.js";
@@ -12,7 +13,9 @@ import {
 import {
   getLibraryArtistMbids,
   getLibraryArtistProjection,
+  getRecentlyAddedLibraryArtists,
 } from "../../../services/libraryQueryService.js";
+import { resolveAvailableOnly } from "./libraryIndex.js";
 
 const ARTIST_LOOKUP_BATCH_MAX = 100;
 
@@ -34,6 +37,7 @@ const libraryAlbumResult = (album, ownedTrackMbids = []) => ({
   libraryAlbumId: String(album.providerId ?? album.id),
   libraryArtistId: String(album.providerArtistId ?? album.artistId),
   status:
+    album.trackListComplete === false ||
     Number(album.statistics?.trackCount || 0) > Number(album.statistics?.trackFileCount || 0)
       ? "partial"
       : album.available
@@ -41,7 +45,8 @@ const libraryAlbumResult = (album, ownedTrackMbids = []) => ({
         : "partial",
   monitored: album.monitored,
   managedBy: album.managedBy || null,
-  percentOfTracks: Number(album.statistics?.percentOfTracks || 0),
+  trackListComplete: album.trackListComplete !== false,
+  ...(album.trackListComplete === false ? {} : { percentOfTracks: Number(album.statistics?.percentOfTracks || 0) }),
   sizeOnDisk: Number(album.statistics?.sizeOnDisk || 0),
   trackCount: Number(album.statistics?.trackCount || 0),
   trackFileCount: Number(album.statistics?.trackFileCount || 0),
@@ -289,7 +294,7 @@ export function registerMisc(router) {
         }
         const album = result.value;
         if (!album) {
-          delete results[foreignAlbumId];
+          if (results[foreignAlbumId]?.managedBy !== "aurral") delete results[foreignAlbumId];
           continue;
         }
         if (results[foreignAlbumId]) continue;
@@ -311,6 +316,7 @@ export function registerMisc(router) {
             album.artistId !== undefined && album.artistId !== null ? String(album.artistId) : null,
           status: hasFiles ? "available" : monitored ? "monitored" : "unmonitored",
           monitored,
+          trackListComplete: true,
           percentOfTracks,
           sizeOnDisk,
           trackCount,
@@ -330,18 +336,16 @@ export function registerMisc(router) {
     }
   });
 
-  router.get("/recent", async (req, res) => {
+  router.get("/recent", noCache, (req, res) => {
     try {
-      const artists = await libraryManager.getAllArtists();
-      const recent = [...artists]
-        .sort((a, b) => new Date(b.addedAt || b.added) - new Date(a.addedAt || a.added))
-        .slice(0, 20)
-        .map((artist) => ({
-          ...artist,
-          foreignArtistId: artist.foreignArtistId || artist.mbid,
-          added: artist.addedAt || artist.added,
-        }));
-      res.set("Cache-Control", "public, max-age=300");
+      const recent = getRecentlyAddedLibraryArtists({
+        availableOnly: resolveAvailableOnly(undefined, dbOps.getSettings()),
+        limit: 20,
+      }).map((artist) => ({
+        ...artist,
+        foreignArtistId: artist.foreignArtistId || artist.mbid,
+        added: artist.addedAt,
+      }));
       res.json(recent);
     } catch (error) {
       res.status(500).json({

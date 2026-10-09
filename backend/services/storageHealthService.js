@@ -444,7 +444,7 @@ async function checkDownloadsSection() {
         detail: rootOverlaps
           .map((warning) => `${warning.lidarrRoot}: ${warning.message}`)
           .join(" "),
-        fix: "Overlapping roots are allowed, but Lidarr can rename, import, or delete files under an overlapping root.",
+        fix: "Use separate folders. While they overlap, Lidarr can rename, import, or delete files in the shared folder, and Aurral leaves files in a Lidarr root folder to Lidarr.",
       }),
     );
   }
@@ -855,7 +855,7 @@ async function checkNativePlaybackSection() {
   if (trackCount === 0) {
     return buildSection("native-playback", "Aurral-native playback", [
       healthStep("indexed", "warn", "Library media is ready for native playback", {
-        fix: "Connect Lidarr, let the library index refresh, then run Storage Health again.",
+        fix: "Add music to the Downloads Folder or connect Lidarr, then scan the Library and run Storage Health again.",
       }),
     ]);
   }

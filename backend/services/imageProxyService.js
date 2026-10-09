@@ -5,7 +5,6 @@ import path from "path";
 import { Agent, fetch as undiciFetch } from "undici";
 import sharp from "./sharpConfig.js";
 import { resolveAurralDataDir } from "../config/data-dir.js";
-import { noteDeprecatedUsage } from "./deprecatedUsage.js";
 import { isPrivateAddress, isPrivateHostname } from "../../lib/publicUrl.js";
 
 const IMAGE_PROXY_ROUTE = "/api/image-proxy";
@@ -790,19 +789,15 @@ export const handleImageProxyRequest = async (req, res) => {
   });
 };
 
-export const handleLegacyImageProxyRequest = async (req, res) => {
-  noteDeprecatedUsage("image-proxy-query");
-  const rawSourceUrl = typeof req.query.src === "string" ? req.query.src.trim() : "";
-  if (!rawSourceUrl) {
-    return res.status(404).json({ error: "Image not found" });
+export const handleImageCacheRequest = async (req, res) => {
+  const sourceUrl = typeof req.body?.src === "string" ? req.body.src.trim() : "";
+  if (!/^https?:\/\//i.test(sourceUrl)) {
+    return res.status(400).json({ error: "An http or https image URL is required" });
   }
-
   try {
-    const cached = await warmImageProxy(rawSourceUrl);
-    if (!cached?.localUrl) {
-      return res.status(404).json({ error: "Image not found" });
-    }
-    return res.redirect(302, cached.localUrl);
+    const cached = await warmImageProxy(sourceUrl);
+    if (!cached?.localUrl) return res.status(404).json({ error: "Image not found" });
+    return res.json({ url: cached.localUrl });
   } catch {
     return res.status(404).json({ error: "Image not found" });
   }

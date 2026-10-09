@@ -6,7 +6,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: "Aurral",
-      description: "Documentation for Aurral: self-hosted music discovery for the Lidarr stack.",
+      description: "Documentation for Aurral: self-hosted music discovery and library management.",
       logo: {
         alt: "Aurral",
         src: "./src/assets/logo.svg",
@@ -94,6 +94,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { slug: "api/overview" },
+            { slug: "api/app-contract" },
             { slug: "api/endpoints" },
           ],
         },

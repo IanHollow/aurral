@@ -1,6 +1,7 @@
+import { audioContentType } from "./audioFileStream.js";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { dbOps } from "../db/helpers/index.js";
+import { dbOps, userOps } from "../db/helpers/index.js";
 import { db } from "../config/db-sqlite.js";
 import {
   getLibraryAlbumPage,
@@ -65,6 +66,13 @@ const seconds = (durationMs) => {
   return Number.isFinite(value) && value > 0 ? Math.round(value / 1000) : 0;
 };
 
+const bitRateKbps = (quality) => {
+  const lidarrKbps = Number.parseInt(quality?.audioBitRate, 10);
+  if (lidarrKbps > 0) return lidarrKbps;
+  const bitsPerSecond = Number(quality?.bitrate);
+  return bitsPerSecond > 0 ? Math.round(bitsPerSecond / 1000) : null;
+};
+
 const isoDate = (epochMs) => new Date(Number(epochMs) || Date.now()).toISOString();
 
 const year = (value) => {
@@ -89,7 +97,8 @@ const includesAurralMusicFolder = (options = {}) => {
 
 const genreNames = (value) =>
   (Array.isArray(value) ? value : [value])
-    .map((entry) => String(entry || "").trim())
+    .flatMap((entry) => String(entry || "").split(";"))
+    .map((entry) => entry.trim())
     .filter(Boolean);
 
 const entityGenres = (entity) => {
@@ -156,7 +165,7 @@ const toSong = (library, track, album = findAlbumForTrack(library, track)) => {
     artistId: artistValue.id,
     albumArtists: [artistValue],
     artists: [artistValue],
-    contentType: `audio/${format}`,
+    contentType: audioContentType(format),
     created: isoDate(track.createdAt ?? file?.createdAt ?? file?.mtimeMs),
     track: Number(relation?.trackNumber) || 0,
     discNumber: Number(relation?.discNumber) || 1,
@@ -170,12 +179,13 @@ const toSong = (library, track, album = findAlbumForTrack(library, track)) => {
     musicBrainzId: track.mbid || "",
     mediaType: "song",
   };
+  const bitRate = bitRateKbps(file?.quality);
+  if (bitRate) song.bitRate = bitRate;
   const releaseYear = year(album?.releaseDate);
   if (releaseYear != null) song.year = releaseYear;
-  const genre = (Array.isArray(genres) ? genres[0] : genres) || null;
-  if (genre) {
-    song.genre = genre;
-    song.genres = [{ name: genre }];
+  if (genres.length) {
+    song.genre = genres[0];
+    song.genres = genres.map((name) => ({ name }));
   }
   return song;
 };
@@ -319,7 +329,7 @@ function toPlaylistSong(
   const songKind = kind === "flow" ? "flow-song" : "shared-song";
   const id = idFor(songKind, `${playlist.id}:${job.id}`);
   const albumMbid = String(job.releaseGroupMbid || job.albumMbid || "").trim();
-  return {
+  const song = {
     id,
     parent: idFor(kind, playlist.id),
     isDir: false,
@@ -331,7 +341,7 @@ function toPlaylistSong(
     albumArtists: [artist],
     artists: [artist],
     coverArt: albumMbid ? idFor("album", `release-group:${albumMbid}`) : undefined,
-    contentType: `audio/${format}`,
+    contentType: audioContentType(format),
     created: isoDate(job.createdAt),
     // Stars on unmatched playlist songs stay keyed by the playlist song, not a library track.
     starred: starredAt?.get(`${songKind}:${playlist.id}:${job.id}`),
@@ -345,6 +355,8 @@ function toPlaylistSong(
     musicBrainzId: job.trackMbid || "",
     mediaType: "song",
   };
+  if (job.qualityBitrateKbps > 0) song.bitRate = job.qualityBitrateKbps;
+  return song;
 }
 
 function playlistJobs(playlist) {
@@ -448,6 +460,20 @@ export function getSong(value, user) {
   return track?.identityKey ? toSong(library, track) : null;
 }
 
+export function findUniqueLibrarySong(artist, title, user) {
+  if (!String(artist).trim() || !String(title).trim()) return null;
+  const library = indexFocusedLibrary(getLibraryForTrackMatches({
+    source: "all",
+    availableOnly: true,
+    titles: [String(title).trim()],
+  }), starredAtFor(user));
+  const songs = library.tracks.map((track) => toSong(library, track)).filter((song) =>
+    song.artist.toLocaleLowerCase() === String(artist).trim().toLocaleLowerCase()
+      && song.title.toLocaleLowerCase() === String(title).trim().toLocaleLowerCase(),
+  );
+  return songs.length === 1 ? songs[0] : null;
+}
+
 export function getMusicDirectory(value, user) {
   if (value === "root" || value === "1") {
     const rootId = value === "1" ? "1" : "root";
@@ -522,7 +548,7 @@ export function getAlbumList(options = {}, user = null) {
   if (type === "starred") {
     return getStarred(user).album.slice(offset, offset + limit);
   }
-  if (type === "frequent") return getFrequentlyPlayedAlbums(user, { offset, limit });
+  if (type === "frequent" || type === "recent") return getPlayedAlbums(type, user, { offset, limit });
   // Aurral does not currently store per-user ratings. Returning no albums is
   // accurate; falling through would falsely label an alphabetical list as rated.
   if (type === "highest") return [];
@@ -560,7 +586,7 @@ export function getGenres() {
 const getStarsStmt = db.prepare(
   "SELECT entity_kind, entity_key, created_at FROM subsonic_stars WHERE user_id = ? ORDER BY created_at, entity_kind, entity_key",
 );
-const getFrequentlyPlayedAlbumsStmt = db.prepare(`
+const preparePlayedAlbumsStmt = (orderBy) => db.prepare(`
   SELECT album.identity_key
   FROM play_album_stats AS played
   JOIN library_albums AS album
@@ -576,12 +602,15 @@ const getFrequentlyPlayedAlbumsStmt = db.prepare(`
         AND media.available = 1
     )
   GROUP BY album.id
-  ORDER BY SUM(played.play_count) DESC,
-    MAX(played.last_played_at) DESC,
+  ORDER BY ${orderBy},
     album.title COLLATE NOCASE,
     album.id
   LIMIT ? OFFSET ?
 `);
+const playedAlbumsStmts = {
+  frequent: preparePlayedAlbumsStmt("SUM(played.play_count) DESC, MAX(played.last_played_at) DESC"),
+  recent: preparePlayedAlbumsStmt("MAX(played.last_played_at) DESC"),
+};
 const addStarStmt = db.prepare(
   "INSERT OR IGNORE INTO subsonic_stars (user_id, entity_kind, entity_key, created_at) VALUES (?, ?, ?, ?)",
 );
@@ -596,9 +625,9 @@ const getStarsChangedStmt = db.prepare(
   "SELECT changed_at FROM subsonic_star_changes WHERE user_id = ?",
 );
 
-function getFrequentlyPlayedAlbums(user, { offset, limit }) {
+function getPlayedAlbums(type, user, { offset, limit }) {
   if (!user?.id || limit === 0) return [];
-  const albumKeys = getFrequentlyPlayedAlbumsStmt
+  const albumKeys = playedAlbumsStmts[type]
     .all(user.id, limit, offset)
     .map((row) => row.identity_key);
   if (!albumKeys.length) return [];
@@ -962,7 +991,7 @@ export async function createSubsonicPlaylist(user, { name, songIds = [] } = {}) 
 
 export async function updateSubsonicPlaylist(
   user,
-  { playlistId, name, comment, songIdsToAdd = [], songIndexesToRemove = [] } = {},
+  { playlistId, name, comment, songIds, songIdsToAdd = [], songIndexesToRemove = [] } = {},
 ) {
   return withHonkerLock("weekly-flow-operation", async () => {
     const playlist = flowPlaylistConfig.getStaticPlaylistForUser(
@@ -970,10 +999,10 @@ export async function updateSubsonicPlaylist(
       normalizeStaticPlaylistId(playlistId),
     );
     if (!playlist || !hasPermission(user, "accessFlow")) return null;
-    const resolvedAdds = songIdsToAdd.map((id) => resolveSubsonicTrack(user, id));
+    const resolvedAdds = (songIds ?? songIdsToAdd).map((id) => resolveSubsonicTrack(user, id));
     if (resolvedAdds.some((entry) => !entry)) return null;
     const removals = new Set(songIndexesToRemove);
-    const currentTracks = playlist.tracks.filter((_track, index) => !removals.has(index));
+    const currentTracks = songIds !== undefined ? [] : playlist.tracks.filter((_track, index) => !removals.has(index));
     const nextTracks = [
       ...currentTracks,
       ...resolvedAdds.map((entry) => entry.track),
@@ -1169,7 +1198,7 @@ export function getSubsonicPlaylists(user) {
     const playlist = {
       id: idFor("flow", flow.id),
       name: flow.name,
-      owner: user.username,
+      owner: userOps.getUserById(flow.ownerUserId)?.username || "",
       coverArt: playlistCoverArt("flow", flow.id),
       songCount: jobs.length,
       duration: jobs.reduce((total, job) => total + seconds(job.durationMs), 0),
@@ -1185,7 +1214,7 @@ export function getSubsonicPlaylists(user) {
     const value = {
       id: idFor("shared", playlist.id),
       name: playlist.name,
-      owner: user.username,
+      owner: userOps.getUserById(playlist.ownerUserId)?.username || "",
       coverArt: playlistCoverArt("shared", playlist.id),
       songCount: jobs.length,
       duration: jobs.reduce((total, job) => total + seconds(job.durationMs), 0),
@@ -1210,7 +1239,8 @@ export function getSubsonicPlaylist(value, user) {
   return {
     id: idFor(kind, playlist.id),
     name: playlist.name,
-    owner: user.username,
+    ...(playlist.description ? { comment: playlist.description } : {}),
+    owner: userOps.getUserById(playlist.ownerUserId)?.username || "",
     coverArt: playlistCoverArt(kind, playlist.id),
     songCount: jobs.length,
     duration: jobs.reduce((total, job) => total + seconds(job.durationMs), 0),

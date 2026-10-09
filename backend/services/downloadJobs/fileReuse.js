@@ -606,6 +606,12 @@ async function findLidarrSource(track, options = {}) {
   return null;
 }
 
+async function canReuseLidarrFiles(options) {
+  if (options.allowLidarr === false) return false;
+  const { lidarrClient } = await import("../lidarrClient.js");
+  return lidarrClient.isConfigured();
+}
+
 /**
  * Resolves a reusable track source from local storage, Aurral library, or Lidarr library.
  *
@@ -624,7 +630,7 @@ export async function resolveReusableTrackSource(track, options = {}) {
 
   const aurralSource = await findAurralSource(track, options);
   if (aurralSource) return { source: aurralSource, reason: null };
-  if (options.allowLidarr !== false) {
+  if (await canReuseLidarrFiles(options)) {
     const lidarrSource = await findLidarrSource(track, options);
     if (lidarrSource) return { source: lidarrSource, reason: null };
   }
@@ -647,7 +653,7 @@ export async function resolveRepairTrackSource(track, options = {}) {
   const localSource = await findLocalExistingSource(track, options);
   if (localSource) return { source: localSource, reason: null };
 
-  if (options.allowLidarr !== false) {
+  if (await canReuseLidarrFiles(options)) {
     const lidarrSource = await findLidarrSource(track, options);
     if (lidarrSource) return { source: lidarrSource, reason: null };
   }
@@ -721,6 +727,23 @@ export async function restoreCompletedTrack(job, options = {}) {
     action: "requeued",
     reason: reason || "No reusable source found",
   };
+}
+
+// A download that reused a Lidarr file needs Aurral's own copy once Lidarr
+// is turned off.
+export function requeueJobsUsingLidarrFiles({ downloadRoot = resolveDownloadRoot(), lidarrRoots = [] } = {}) {
+  const root = path.resolve(downloadRoot);
+  let requeued = 0;
+  for (const job of downloadTracker.getAll()) {
+    if (job?.status !== "done" || typeof job.finalPath !== "string" || job.managedBy === "lidarr") continue;
+    const finalPath = path.resolve(remapLegacyPath(job.finalPath, root));
+    if (isPathInsideRoot(finalPath, root)) continue;
+    const inLidarrRoot = lidarrRoots.some((lidarrRoot) =>
+      finalPath === path.resolve(lidarrRoot) || isPathInsideRoot(finalPath, path.resolve(lidarrRoot)));
+    if (!job.externalPath && !inLidarrRoot) continue;
+    if (downloadTracker.setPending(job.id, "Lidarr was turned off")) requeued += 1;
+  }
+  return requeued;
 }
 
 export async function repairJobsUnderRemovedPlaylistDir(playlistType, options = {}) {

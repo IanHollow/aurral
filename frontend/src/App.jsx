@@ -14,6 +14,7 @@ import { DiscoverRecentProvider } from "./contexts/DiscoverRecentProvider";
 import { AudioQueueProvider } from "./contexts/AudioQueueProvider";
 import { AlertTriangle, XCircle } from "lucide-react";
 import ReloadPrompt from "./components/ReloadPrompt";
+import ThemeSync from "./components/ThemeSync";
 import UpdateIndicator from "./components/UpdateIndicator";
 import SpotifyReconnectNotice from "./components/SpotifyReconnectNotice";
 import { DotLoader } from "./components/DotLoader";
@@ -227,7 +228,8 @@ function AppContent() {
                     <div className="app-status-banner app-status-banner--warning">
                       <AlertTriangle className="app-status-banner__icon app-status-banner__icon--warning" />
                       <p className="app-status-banner__text app-status-banner__text--warning">
-                        Aurral is responding slowly. Lidarr may be busy — try again in a minute.
+                        Aurral is responding slowly.{" "}
+                        {bootstrap?.lidarrConfigured ? "Lidarr may be busy. Try again in a minute." : "Try again in a minute."}
                       </p>
                     </div>
                   )}
@@ -245,8 +247,7 @@ function AppContent() {
                     <div className="app-status-banner app-status-banner--warning">
                       <AlertTriangle className="app-status-banner__icon app-status-banner__icon--warning" />
                       <p className="app-status-banner__text app-status-banner__text--warning">
-                        Root folder is not configured. Please configure your music
-                        library root folder in settings.
+                        The Downloads Folder is not set. Choose one in Settings → Download clients.
                       </p>
                     </div>
                   )}
@@ -352,6 +353,7 @@ function App() {
           <AudioPlayerProvider>
             <AudioQueueProvider>
               <AppContent />
+              <ThemeSync />
               <ReloadPrompt />
             </AudioQueueProvider>
           </AudioPlayerProvider>

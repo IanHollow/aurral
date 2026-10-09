@@ -95,6 +95,10 @@ export const SYSTEM_TASK_LABELS = {
     label: "Playlist File Reuse Repair",
     description: "Repairs reusable playlist file links when source files move.",
   },
+  "review-timeout": {
+    label: "Review Timeout",
+    description: "Denies songs held for review longer than the maximum review wait.",
+  },
   "weekly-flow-startup-reuse-repair": {
     label: "Startup Playlist Reuse Repair",
     description: "Checks reusable playlist links after Aurral starts.",
@@ -130,6 +134,10 @@ export const SYSTEM_TASK_LABELS = {
   "playlist-startup-migration": {
     label: "Playlist Startup Migration",
     description: "Migrates legacy playlist files and reconciles playlist folders.",
+  },
+  "lidarr-files-release": {
+    label: "Lidarr Turned Off",
+    description: "Downloads Aurral's own copy of playlist and flow songs that used a Lidarr file.",
   },
   "lidarr-retry": {
     label: "Lidarr Retry",

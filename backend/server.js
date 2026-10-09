@@ -74,7 +74,7 @@ const allowedCorsOrigins = String(process.env.CORS_ORIGIN || "")
 
 const isSubsonicRequest = (req) => req.path === "/rest" || req.path.startsWith("/rest/");
 const isImageProxyRequest = (req) =>
-  req.path === "/api/image-proxy" || req.path.startsWith("/api/image-proxy/");
+  (req.method === "GET" || req.method === "HEAD") && req.path.startsWith("/api/image-proxy/");
 
 const corsDefaults = {
   methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
@@ -117,7 +117,7 @@ if (process.env.OIDC_ENABLED === "true" && !isOidcEnabled()) {
   );
 }
 
-const connectSrcDirectives = ["'self'", "ws:", "wss:", "https://api.github.com", "https://raw.githubusercontent.com"];
+const connectSrcDirectives = ["'self'", "ws:", "wss:", "https://api.github.com"];
 if (process.env.AUTH_PROXY_DOMAIN) {
   connectSrcDirectives.push(process.env.AUTH_PROXY_DOMAIN);
 }
@@ -137,7 +137,7 @@ app.use(
         fontSrc: ["'self'", "data:"],
         imgSrc: ["'self'", "data:", "https:"],
         connectSrc: connectSrcDirectives,
-        mediaSrc: ["'self'", "data:", "https://*.dzcdn.net", "https://*.deezer.com"],
+        mediaSrc: ["'self'", "data:", "https:"],
         frameSrc: ["'self'", "https://www.youtube-nocookie.com", "https://www.youtube.com"],
         frameAncestors: null,
         upgradeInsecureRequests: null,

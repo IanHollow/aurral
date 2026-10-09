@@ -3,8 +3,12 @@ import express from "express";
 
 import { APP_NAME, APP_VERSION } from "../config/constants.js";
 import { hasPermission, resolveSubsonicTokenUser, resolveUser } from "../middleware/auth.js";
+import { getPlayQueue, savePlayQueue } from "../services/subsonicPlayQueueService.js";
+import { streamSubsonicAudio } from "../services/subsonicTranscodeService.js";
+import { getLyricsBySongId } from "../services/subsonicLyricsService.js";
 import { streamAudioFile } from "../services/audioFileStream.js";
 import {
+  findUniqueLibrarySong,
   getAlbum,
   getAlbumList,
   getArtist,
@@ -45,6 +49,8 @@ const IGNORED_ARTICLES = "The El La Los Las Le Les";
 const SUPPORTED_EXTENSIONS = [
   { name: "formPost", versions: [1] },
   { name: "topSongsByArtistId", versions: [1] },
+  { name: "songLyrics", versions: [1] },
+  { name: "transcodeOffset", versions: [1] },
 ];
 const router = express.Router();
 
@@ -202,15 +208,29 @@ function validateRequest(req, format) {
   return { format, password, token, salt };
 }
 
+const artistSortKey = (name) => {
+  const value = String(name || "");
+  const space = value.indexOf(" ");
+  return space > 0 && IGNORED_ARTICLES.split(" ").some((article) =>
+    article.toLowerCase() === value.slice(0, space).toLowerCase(),
+  ) ? value.slice(space + 1) : value;
+};
+
 const groupArtists = (artists) => {
   const groups = new Map();
   for (const artist of artists) {
-    const name = String(artist.name || "#");
-    const key = name.slice(0, 1).toUpperCase();
+    const name = artistSortKey(artist.name);
+    const first = [...name][0] || "#";
+    const key = /^\p{L}$/u.test(first) ? first.toUpperCase() : "#";
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(artist);
   }
-  return [...groups.entries()].map(([name, artist]) => ({ name, artist }));
+  return [...groups.entries()]
+    .sort(([a], [b]) => a === b ? 0 : a === "#" ? 1 : b === "#" ? -1 : a < b ? -1 : 1)
+    .map(([name, artist]) => ({
+      name,
+      artist: artist.sort((a, b) => artistSortKey(a.name).localeCompare(artistSortKey(b.name))),
+    }));
 };
 
 function handleBinaryError(res, message = "Requested media was not found") {
@@ -317,15 +337,21 @@ async function handleSubsonicRequest(req, res) {
   if (method === "getbookmarks") {
     return sendResponse(res, format, "ok", null, { bookmarks: { bookmark: [] } });
   }
-  if (method === "getplayqueue") {
-    return sendResponse(res, format, "ok", null, {
-      playQueue: {
-        username: user.username,
-        changed: new Date(0).toISOString(),
-        changedBy: APP_NAME,
-        entry: [],
-      },
+  if (method === "saveplayqueue") {
+    const position = getParameter(req, "position");
+    if (position && (!/^\d+$/.test(position) || !Number.isSafeInteger(Number(position)))) {
+      return sendError(res, format, 0, "position must be a nonnegative integer in milliseconds");
+    }
+    savePlayQueue(user, {
+      ids: getParameters(req, ["id"]),
+      current: getParameter(req, "current"),
+      position: position ? Number(position) : null,
+      changedBy: getParameter(req, "c"),
     });
+    return sendResponse(res, format);
+  }
+  if (method === "getplayqueue") {
+    return sendResponse(res, format, "ok", null, { playQueue: getPlayQueue(user) });
   }
   if (method === "getalbumlist" || method === "getalbumlist2") {
     const responseKey = method === "getalbumlist" ? "albumList" : "albumList2";
@@ -412,8 +438,20 @@ async function handleSubsonicRequest(req, res) {
       ? sendResponse(res, format, "ok", null, { albumInfo: {} })
       : sendError(res, format, 70, "Requested data was not found");
   }
+  if (method === "getlyricsbysongid") {
+    const id = getParameter(req, "id");
+    if (!id) return sendError(res, format, 10, "Required parameter is missing: id");
+    return sendResponse(res, format, "ok", null, {
+      lyricsList: { structuredLyrics: await getLyricsBySongId(id, user) },
+    });
+  }
   if (method === "getlyrics") {
-    return sendResponse(res, format, "ok", null, { lyrics: { value: "" } });
+    const song = findUniqueLibrarySong(getParameter(req, "artist"), getParameter(req, "title"), user);
+    const lyrics = song ? await getLyricsBySongId(song.id, user) : [];
+    return sendResponse(res, format, "ok", null, { lyrics: {
+      ...(lyrics.length ? { artist: song.artist, title: song.title } : {}),
+      value: lyrics[0]?.line.map((line) => line.value).join("\n") || "",
+    } });
   }
   if (method === "getinternetradiostations") {
     return sendResponse(res, format, "ok", null, { internetRadioStations: { internetRadioStation: [] } });
@@ -466,7 +504,7 @@ async function handleSubsonicRequest(req, res) {
             comment: Object.hasOwn(requestParameters(req), "comment")
               ? getParameter(req, "comment")
               : undefined,
-            songIdsToAdd: getParameters(req, ["songId"]),
+            songIds: getParameters(req, ["songId"]),
           })
         : await createSubsonicPlaylist(user, {
             name,
@@ -556,7 +594,28 @@ async function handleSubsonicRequest(req, res) {
   if (method === "stream" || method === "download") {
     const filePath = resolveStreamPath(getParameter(req, "id"), user);
     if (!filePath) return handleBinaryError(res, "Track file missing");
-    const streamed = await streamAudioFile(res, filePath);
+    const outputFormat = getParameter(req, "format").toLowerCase();
+    const bitrate = getParameter(req, "maxBitRate");
+    const offset = getParameter(req, "timeOffset");
+    if (method === "stream") {
+      if (outputFormat && !["raw", "mp3", "opus", "aac"].includes(outputFormat)) {
+        return sendError(res, format, 0, "Unsupported audio format");
+      }
+      if (bitrate && (!/^\d+$/.test(bitrate) || !Number.isSafeInteger(Number(bitrate))
+        || (Number(bitrate) > 0 && Number(bitrate) < 8))) {
+        return sendError(res, format, 0, "maxBitRate must be zero or at least 8 kbps");
+      }
+      if (offset && (!Number.isFinite(Number(offset)) || Number(offset) < 0)) {
+        return sendError(res, format, 0, "timeOffset must be a nonnegative number of seconds");
+      }
+    }
+    const streamed = method === "download"
+      ? await streamAudioFile(res, filePath)
+      : await streamSubsonicAudio(res, filePath, {
+        format: outputFormat,
+        maxBitRate: Number(bitrate) || 0,
+        timeOffset: Number(offset) || 0,
+      });
     return streamed || res.headersSent ? undefined : handleBinaryError(res, "Track file missing");
   }
   if (method === "getcoverart") {

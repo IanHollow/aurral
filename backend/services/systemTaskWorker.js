@@ -47,6 +47,11 @@ export async function processSystemTask(payload = {}, job = null, context = {}) 
       downloadWorker.scheduleReuseLinkRepair(false);
       return;
     }
+    case "review-timeout": {
+      const { denyExpiredReviews } = await import("./downloadJobs/blockedJobReview.js");
+      await denyExpiredReviews();
+      return;
+    }
     case "quality-upgrade-check": {
       const { runQualityUpgradeCheck } = await import("./qualityProfileService.js");
       await runQualityUpgradeCheck({
@@ -94,7 +99,11 @@ export async function processSystemTask(payload = {}, job = null, context = {}) 
       const { hasCompletedLibraryScan, scheduleLibraryScan } = await import(
         "./libraryScanWorker.js"
       );
-      if (!hasCompletedLibraryScan()) scheduleLibraryScan();
+      const { lidarrClient } = await import("./lidarrClient.js");
+      const { hasLidarrLibraryData } = await import("./libraryMediaStore.js");
+      if (!hasCompletedLibraryScan() || (!lidarrClient.isConfigured() && hasLidarrLibraryData())) {
+        scheduleLibraryScan();
+      }
       return;
     }
     case "weekly-flow-startup-check": {
@@ -230,6 +239,11 @@ export async function processSystemTask(payload = {}, job = null, context = {}) 
         );
       }
       await refreshUpgradeReadiness();
+      return;
+    }
+    case "lidarr-files-release": {
+      const { downloadWorker } = await import("./downloadJobs/downloadWorker.js");
+      await downloadWorker.releaseLidarrFiles();
       return;
     }
     case "lidarr-retry": {
